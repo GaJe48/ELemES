@@ -57,6 +57,7 @@ dependencies {
     implementation(libs.jsoup)
     implementation(libs.text.recognition)
     implementation(libs.coil.compose)
+    implementation(libs.coil.gif)
     implementation(libs.androidx.navigation.compose)
     implementation(libs.androidx.compose.material.icons.extended)
     implementation(libs.androidx.material3)

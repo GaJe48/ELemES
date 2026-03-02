@@ -23,6 +23,8 @@ import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlinx.coroutines.suspendCancellableCoroutine
 import org.jsoup.Jsoup
 import androidx.core.content.edit
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.runBlocking
 import kotlin.coroutines.resume
 import android.content.ContentValues
@@ -30,31 +32,52 @@ import android.os.Environment
 import android.provider.MediaStore
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.net.Uri
+import android.provider.OpenableColumns
+import android.webkit.MimeTypeMap
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.core.app.NotificationCompat
 import kotlinx.coroutines.delay
+import okhttp3.MultipartBody
+import okhttp3.RequestBody
+import okio.BufferedSink
 
 class Backend(application: Application) : AndroidViewModel(application) {
-    private val prefer = application.getSharedPreferences("prefer", Context.MODE_PRIVATE)
-
     var isLoading by mutableStateOf(false)
+        private set
+    var isAutoLoginLoading by mutableStateOf(false)
+        private set
+    var isRefreshing by mutableStateOf(false)
         private set
     var isLogin by mutableStateOf(false)
         private set
-    var errorMessage by mutableStateOf("")
+    var errorMessage by mutableStateOf(String())
         private set
+    private val _snackbarEvent = Channel<String>(Channel.CONFLATED)
+    val snackbarEvent = _snackbarEvent.receiveAsFlow()
     var studentProfileUI by mutableStateOf(StudentProfile())
         private set
     var lectureCourseUI by mutableStateOf<List<LectureCourse>>(emptyList())
         private set
-    var meetingDetailUI by mutableStateOf(MeetingDetail())
+    var meetingDetailUI by mutableStateOf<List<MeetingDetail>>(emptyList())
         private set
-    var taskDetailUI by mutableStateOf<TaskDetail?>(null)
+    var taskDetailUI by mutableStateOf<Map<Int, TaskDetail>>(emptyMap())
+        private set
+    var presenceDetailUI by mutableStateOf<List<String>>(emptyList())
         private set
 
-    private val baseRequest: Request.Builder
-        get() = Request.Builder()
-            .header("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36")
+    var uploadProgress by mutableFloatStateOf(0f)
+        private set
+    var uploadFileName by mutableStateOf(String())
+        private set
+    var isUploading by mutableStateOf(false)
+        private set
 
+
+    private val prefer = application.getSharedPreferences("prefer", Context.MODE_PRIVATE)
+    private var isDemo = false
+    private val cachePresence = mutableListOf<String>()
+    private var nimCachePresence = String()
     private val webClient = OkHttpClient.Builder()
         .cookieJar(object : CookieJar {
             private val cookieStore = mutableListOf<Cookie>()
@@ -73,37 +96,40 @@ class Backend(application: Application) : AndroidViewModel(application) {
             }
 
             var response = chain.proceed(request)
-            val html = response.peekBody(Long.MAX_VALUE).string()
+            val html = response.peekBody(70).string()
 
-            if (!request.url.toString().contains("login_new") && html.contains("name=\"csrf_token\"")) {
+            if (!request.url.toString().contains("login_new") && html.contains("Login | LMS UNINDRA")) {
                 println("🚨 SATPAM: Cookie Basi! Menahan request ke ${request.url}...")
                 response.close()
 
-                val htmlDashboardBaru = runBlocking { silentLogin() }
-
-                if (htmlDashboardBaru.isNotEmpty()) {
-                    println("🚨 SATPAM: Silent Login Sukses! Mengulang request asli...")
-                    response = chain.proceed(request)
-                } else {
-                    println("🚨 SATPAM: Auto-Relogin gagal.")
-                    isLogin = false
+                when (val loginResult = runBlocking { silentLogin() }) {
+                    is LoginResult.Success -> {
+                        println("🚨 SATPAM: Silent Login Sukses! Mengulang request asli...")
+                        response = chain.proceed(request)
+                    }
+                    is LoginResult.WrongPassword -> {
+                        println("🚨 SATPAM: Password Salah! Hapus kredensial, paksa login ulang.")
+                        prefer.edit { remove("nim").remove("pwd") }
+                        errorMessage = "Password berubah. Silakan login ulang."
+                        _snackbarEvent.trySend(errorMessage)
+                        isLogin = false
+                    }
+                    is LoginResult.Error -> {
+                        println("🚨 SATPAM: Error jaringan — ${loginResult.message}")
+                        errorMessage = loginResult.message
+                        _snackbarEvent.trySend(errorMessage)
+                    }
+                    else -> {}
                 }
             }
             response
         }
         .build()
 
-    sealed class LoginResult {
-        data class Success(val html: String) : LoginResult()
-        object WrongPassword : LoginResult()
-        object WrongCaptcha : LoginResult()
-        data class Error(val message: String) : LoginResult()
-    }
-
     private suspend fun executeLogin(nim: String, pwd: String): LoginResult {
         try {
-            val reqPayload = baseRequest.url("https://lms.unindra.ac.id/login_new")
-                .header("Skip-Interceptor", "true").build()
+            val reqPayload = Request.Builder().url("https://lms.unindra.ac.id/login_new")
+                .header("Skip-Interceptor", "true").get().build()
             val htmlPayload = Jsoup.parse(webClient.newCall(reqPayload).execute().body.string())
 
             val tCsrf = htmlPayload.select("input[name=csrf_token]").`val`() ?: ""
@@ -115,9 +141,8 @@ class Backend(application: Application) : AndroidViewModel(application) {
                     randomName = n; randomValue = input.`val`(); break
                 }
             }
-
-            val reqCaptcha = baseRequest.url("https://lms.unindra.ac.id/kapca")
-                .header("Skip-Interceptor", "true").build()
+            val reqCaptcha = Request.Builder().url("https://lms.unindra.ac.id/kapca")
+                .header("Skip-Interceptor", "true").get().build()
             val bytes = webClient.newCall(reqCaptcha).execute().body.bytes()
             val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size) ?: return LoginResult.Error("Gagal decode gambar")
 
@@ -129,7 +154,7 @@ class Backend(application: Application) : AndroidViewModel(application) {
                 .add("username", nim).add("pswd", pwd).add("kapca", aiAnswer)
                 .build()
 
-            val reqLogin = baseRequest.url("https://lms.unindra.ac.id/login_new")
+            val reqLogin = Request.Builder().url("https://lms.unindra.ac.id/login_new")
                 .header("Skip-Interceptor", "true")
                 .post(formLogin).build()
 
@@ -149,76 +174,187 @@ class Backend(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    init {
-        if (!prefer.getString("nim", "").isNullOrEmpty()) {
-            isLoading = true
+    fun checkLoginStatus() {
+        if (prefer.getString("nim", "").isNullOrEmpty()) return
 
-            viewModelScope.launch(Dispatchers.IO) {
-                val htmlDashboard = silentLogin()
-                if (htmlDashboard.isNotEmpty()) {
-                    scrapeDashboard(htmlDashboard)
+        isAutoLoginLoading = true
+        viewModelScope.launch(Dispatchers.IO) {
+            when (val result = silentLogin()) {
+                is LoginResult.Success -> {
+                    getInitData(result.html)
                     isLogin = true
                 }
-                delay(50)
-                isLoading = false
+                is LoginResult.WrongPassword -> {
+                    prefer.edit { remove("nim").remove("pwd") }
+                    errorMessage = "Password berubah. Silakan login ulang."
+                    _snackbarEvent.trySend(errorMessage)
+                }
+                is LoginResult.Error -> {
+                    errorMessage = result.message
+                    _snackbarEvent.trySend(errorMessage)
+                }
+                else -> {}
             }
         }
     }
 
-    fun loginManual(nim: String, pwd: String) {
+    fun manualLogin(nim: String, pwd: String) {
+        if (nim == "wowo " && pwd == "nyawit ") {
+            viewModelScope.launch {
+                isLoading = true
+                delay(1000)
+
+                studentProfileUI = StudentProfile(
+                    studentName = "Prabowo-chan",
+                    npm = "1234567890",
+                    studyProgram = "Teknik Yapping S1",
+                    classCode = "Z2X",
+                    studentPhoto = ""
+                )
+
+                lectureCourseUI = listOf(
+                    LectureCourse(
+                        courseCode = "AK47",
+                        courseName = "My Bini Guweh (MBG)",
+                        day = "Senin",
+                        clock = "00:00 - 23:59",
+                        room = "Planet Namek",
+                        lecturerName = "Raiden Shotgun",
+                        lecturerHp = "08123456789",
+                        lecturerPhoto = "",
+                        "",
+                        meetingList = List(10) {"apa"}
+                    ),
+                    LectureCourse(
+                        courseCode = "WW3",
+                        courseName = "19Jt Lapangan Sawit",
+                        day = "Rabu",
+                        clock = "13:00 - 15:30",
+                        room = "AK Enfield",
+                        lecturerName = "Mas Gibran",
+                        lecturerHp = "08987654321",
+                        lecturerPhoto = "",
+                        "",
+                        meetingList = listOf("link1", "link2")
+                    ),
+                    LectureCourse(
+                        courseCode = "TIF-303",
+                        courseName = "Metodologi Copy-Paste Prompt",
+                        day = "Setiap Hari",
+                        clock = "23:59 - 00:00",
+                        room = "Warnet Terdekat",
+                        lecturerName = "Lord ChatGPT, S.AI",
+                        lecturerHp = "Chat Tidak Dibaca",
+                        lecturerPhoto = "",
+                        "",
+                        meetingList = listOf()
+                    ),
+                    LectureCourse(
+                        courseCode = "FF99",
+                        courseName = "Manajemen Kemarahan Publik",
+                        day = "Selasa",
+                        clock = "19:00 - 21:00",
+                        room = "Gedung DPR",
+                        lecturerName = "Lord Rangga",
+                        lecturerHp = "085566778899",
+                        lecturerPhoto = "",
+                        "",
+                        meetingList = listOf("link_tatanan_dunia", "link_empire")
+                    )
+                )
+                isDemo = true
+                isLogin = true
+                isLoading = false
+            }
+            return
+        }
+
         viewModelScope.launch(Dispatchers.IO) {
             isLoading = true
             errorMessage = ""
 
             for (attempt in 1..3) {
-                println("🚀 Login Manual Percobaan $attempt...")
                 when (val result = executeLogin(nim, pwd)) {
                     is LoginResult.Success -> {
-                        println("✅ LOGIN BERHASIL!")
                         prefer.edit { putString("nim", nim).putString("pwd", pwd) }
-                        scrapeDashboard(result.html)
+                        getInitData(result.html)
                         isLogin = true
                         break
                     }
                     is LoginResult.WrongPassword -> {
-                        println("❌ Password Salah.")
                         errorMessage = "NIM atau Password salah!"
+                        _snackbarEvent.trySend(errorMessage)
                         break
                     }
                     is LoginResult.WrongCaptcha -> {
-                        println("⚠️ AI Salah Captcha. Mengulang secara instan...")
-                        if (attempt == 3) errorMessage = "Gagal login. AI meleset membaca Captcha 3 kali."
+                        if (attempt == 3) {
+                            errorMessage = "Gagal login. AI meleset membaca Captcha 3 kali."
+                            _snackbarEvent.trySend(errorMessage)
+                        }
                     }
                     is LoginResult.Error -> {
-                        println("❌ Error: ${result.message}")
                         errorMessage = result.message
+                        _snackbarEvent.trySend(errorMessage)
                         break
                     }
                 }
             }
-            delay(50)
-            isLoading = false
         }
     }
 
-    private suspend fun silentLogin(): String {
+    fun logout() {
+        prefer.edit { remove("nim").remove("pwd") }
+        isAutoLoginLoading = false
+        isLoading = false
+        isLogin = false
+        isDemo = false
+    }
+
+    fun refreshDashboard() {
+        if (isDemo) {
+            viewModelScope.launch {
+                isRefreshing = true
+                delay(1000)
+                isRefreshing = false
+            }
+            return
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            isRefreshing = true
+            errorMessage = ""
+
+            when (val result = silentLogin()) {
+                is LoginResult.Success -> { getInitData(result.html) }
+                is LoginResult.WrongPassword -> {
+                    prefer.edit { remove("nim").remove("pwd") }
+                    errorMessage = "Password berubah. Silakan login ulang."
+                    _snackbarEvent.trySend(errorMessage)
+                    isLogin = false
+                }
+                is LoginResult.Error -> {
+                    if (lectureCourseUI.isEmpty()) errorMessage = result.message
+                    else _snackbarEvent.trySend(result.message)
+                }
+                else -> {}
+            }
+
+            isRefreshing = false
+        }
+    }
+
+    private suspend fun silentLogin(): LoginResult {
         val savedNim = prefer.getString("nim", "") ?: ""
         val savedPwd = prefer.getString("pwd", "") ?: ""
 
-        for (attempt in 1..3) {
-            println("🕵️ Silent Login Percobaan $attempt...")
+        repeat(3) {
             when (val result = executeLogin(savedNim, savedPwd)) {
-                is LoginResult.Success -> {
-                    println("✅ SILENT LOGIN BERHASIL!")
-                    return result.html
-                }
-                is LoginResult.WrongCaptcha -> {
-                    println("⚠️ AI Salah Captcha. Mencoba mengendus lagi...")
-                }
-                else -> return ""
+                is LoginResult.Success -> return result
+                is LoginResult.WrongCaptcha -> {} // retry
+                else -> return result
             }
         }
-        return ""
+        return LoginResult.Error("Gagal login setelah 3x percobaan captcha")
     }
 
     private suspend fun solveCaptcha(bitmap: Bitmap): String = suspendCancellableCoroutine { continuation ->
@@ -227,7 +363,7 @@ class Backend(application: Application) : AndroidViewModel(application) {
 
         recognizer.process(image)
             .addOnSuccessListener { visionText ->
-                val cleanText = visionText.text.replace(" ", "").trim()
+                val cleanText = visionText.text.replace(" ", "")
                 var result = cleanText
                 try {
                     val mathString = cleanText.replace(Regex("[^0-9+]"), "")
@@ -244,169 +380,248 @@ class Backend(application: Application) : AndroidViewModel(application) {
             }
     }
 
-    private fun scrapeDashboard(htmlDashboard: String) {
+    private fun getInitData(htmlDashboard: String) {
         val document = Jsoup.parse(htmlDashboard)
         try {
-            val rawName = document.selectFirst("div.pull-left.info p")?.text() ?: "Name not found"
+            val rawName = document.selectFirst("div.pull-left.info p")?.text() ?: ""
             val studentName = rawName.lowercase().split(" ").joinToString(" ") { it.replaceFirstChar(Char::uppercase) }
             val npm = document.selectFirst("li.user-body strong")?.text() ?: ""
             val studyProgram = document.selectFirst("span.Badge-info")?.text() ?: ""
-            val classCode = document.selectFirst("span.pull-right.text-bold.badge")?.text()?.trim() ?: ""
+            val classCode = document.selectFirst("span.pull-right.text-bold.badge")?.text() ?: ""
             val studentPhoto = "https://lms.unindra.ac.id/lms_publik/images/users/thumbs/$npm.png"
 
             studentProfileUI = StudentProfile(studentName, npm, studyProgram, classCode, studentPhoto)
 
+            if (document.select("div.box-widget").isEmpty()) return
+
             val meetingDict = mutableMapOf<String, List<String>>()
             for (tree in document.select("li.treeview")) {
-                val titleSidebar = tree.selectFirst("span")?.text()?.trim() ?: continue
+                val titleSidebar = tree.selectFirst("span")?.text() ?: continue
                 val parts = titleSidebar.split(" ")
-                if (parts.size >= 2) {
-                    val scheduleKey = "${parts[0]} ${parts[1]}"
 
-                    val meetingList = mutableListOf<String>()
-                    for (li in tree.select("ul li")) {
-                        val link = li.selectFirst("a")?.attr("href") ?: ""
-                        meetingList.add(link)
-                    }
-                    meetingDict[scheduleKey] = meetingList
+                val scheduleKey = "${parts[0]} ${parts[1]}"
+
+                val meetingList = mutableListOf<String>()
+                for (li in tree.select("ul li")) {
+                    val link = li.selectFirst("a")?.attr("href") ?: ""
+                    meetingList.add(link)
                 }
+                meetingDict[scheduleKey] = meetingList
             }
 
             val scrapeClass = mutableListOf<LectureCourse>()
             for (element in document.select("div.box-widget")) {
-                val lecturerName = element.selectFirst("h3.widget-user-username")?.text()?.trim() ?: ""
-                val rawHp = element.selectFirst("h5.widget-user-desc")?.text()?.replace("HP :", "")?.trim() ?: ""
-                val lecturerHp = rawHp.ifEmpty { "Not available" }
+                val rawLecturer = element.selectFirst("h3.widget-user-username")?.text() ?: ""
+                val lecturerName = rawLecturer.lowercase().split(" ").joinToString(" ") { it.replaceFirstChar(Char::uppercase) }
+                val lecturerHp = element.selectFirst("h5.widget-user-desc")?.text()?.replace("HP :", "")?.trim() ?: ""
                 val lecturerPhoto = element.selectFirst("img")?.attr("src") ?: ""
 
-                val rawCourse = element.selectFirst("span.header_badeg")?.text()?.trim() ?: ""
-                val splitCourse = rawCourse.split("-", limit = 2)
-                val courseCode = if (splitCourse.isNotEmpty()) splitCourse[0].trim() else ""
-                val courseName = if (splitCourse.size > 1) splitCourse[1].trim() else rawCourse
+                val rawCourse = element.selectFirst("span.header_badeg")?.text() ?: ""
+                val splitCourse = rawCourse.split(" -")
+                val courseCode = splitCourse[0]
+                val courseName = when (splitCourse[1]) {
+                    "Arsitektur dan Organisasi Komput" -> "Arsitektur dan Organisasi Komputer"
+                    else -> splitCourse[1].trimEnd(' ', '*', '#', ')')
+                }
 
-                val rawDetail = element.selectFirst("span.text-green")?.text()?.trim() ?: ""
+                val rawDetail = element.selectFirst("span.text-green")?.text() ?: ""
                 val detailParts = rawDetail.split("|").map { it.trim() }
-                val room = detailParts.getOrNull(1)?.replace("Ruang:", "")?.trim() ?: ""
-                val rawTime = detailParts.getOrNull(2)?.replace("Waktu:", "")?.trim() ?: ""
-                val day = if (rawTime.contains(",")) rawTime.split(",")[0].trim() else ""
-                val clock = if (rawTime.contains(",")) rawTime.split(",")[1].trim() else rawTime
+                val room = detailParts[1].replace("Ruang: ", "")
+                val rawTime = detailParts[2].replace("Waktu: ", "").split(", ")
+                val day = rawTime[0]
+                val clock = rawTime[1]
 
                 val meetingList = meetingDict["$day $clock"] ?: emptyList()
 
-                scrapeClass.add(LectureCourse(courseCode, courseName, day, clock, room, lecturerName, lecturerHp, lecturerPhoto, meetingList))
+                scrapeClass.add(LectureCourse(courseCode, courseName, day, clock, room, lecturerName, lecturerHp, lecturerPhoto, "", meetingList))
             }
 
-            lectureCourseUI = scrapeClass
-            println("✅ Berhasil mengekstrak ${lectureCourseUI.size} kelas!")
+            val req = Request.Builder().url("https://lms.unindra.ac.id/presensi").get().build()
+            val res = webClient.newCall(req).execute()
+            val html = res.body.string()
+            val parser = Jsoup.parse(html)
+
+            val payload = parser.select("td[onclick*=rps_mhs]")
+            nimCachePresence = payload.attr("onclick").split("'")[3]
+
+            val presensiMap = mutableMapOf<String, String>()
+
+            // Ambil semua baris di dalam tbody tabel
+            val rows = parser.select("table.table-striped tbody tr")
+
+            rows.forEach { row ->
+                val cols = row.select("td")
+
+                // Memastikan baris punya format kolom yang benar
+                if (cols.size >= 10) {
+                    val courseCode = cols[1].text().trim()
+
+                    // Ambil persentase dari kolom Hadir (index 9)
+                    val rawPersen = cols[9].selectFirst("span.badge")?.text()?.trim() ?: "0%"
+                    // Cek jika teksnya cuma "%" atau kosong, ubah jadi "0%"
+                    val persenHadir = if (rawPersen == "%" || rawPersen.isEmpty()) "0%" else rawPersen
+                    presensiMap[courseCode] = persenHadir
+
+                    // Ekstrak cachePresence dan nimCachePresence
+                    val onClickAttr = cols[2].attr("onclick")
+                    if (onClickAttr.contains("rps_mhs")) {
+                        val parts = onClickAttr.split("'")
+                        if (parts.size >= 4) {
+                            cachePresence.add(parts[1]) // kdJdw
+                        }
+                    }
+                }
+            }
+
+            // Langsung mapping persentase ke list scrapeClass
+            // Catatan: Pastikan di data class LectureCourse sudah ada parameter untuk menampung ini
+            // (misalnya bernama `persenHadir`), lalu kita gunakan fungsi `.copy()`
+            lectureCourseUI = scrapeClass.map { course ->
+                val absen = presensiMap[course.courseCode] ?: "0%"
+                course.copy(persen = absen)
+            }
+
         } catch (e: Exception) {
-            e.printStackTrace()
+            errorMessage = e.message ?: "Gagal memuat dashboard"
         }
     }
 
-    fun autoAbsenPertemuan(urlPertemuan: String) {
+    fun executePresence(urlPertemuan: String) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
-                println("🕵️ Memasuki halaman pertemuan: $urlPertemuan")
-
-                val reqPage = baseRequest.url(urlPertemuan).build()
+                val reqPage = Request.Builder().url(urlPertemuan).get().build()
                 val resPage = webClient.newCall(reqPage).execute()
                 val htmlPage = resPage.body.string()
 
                 val document = Jsoup.parse(htmlPage)
-                val downloadLink = document.selectFirst("a[href*=/pertemuan/force_download/]")?.attr("href")
+                val downloadLink = document.selectFirst("a[href*=force_download]")?.attr("href")
 
-                if (!downloadLink.isNullOrEmpty()) {
-                    println("🎯 Target kunci ditemukan! Mengeksekusi GET ke: $downloadLink")
-
-                    val reqDownload = baseRequest.url(downloadLink).build()
+                if (downloadLink != null) {
+                    val reqDownload = Request.Builder().url(downloadLink).get().build()
                     val resDownload = webClient.newCall(reqDownload).execute()
-
-                    // 🚨 TRIK SILUMAN: Langsung tutup koneksinya!
-                    // Server udah keburu nyatet kita absen, tapi kuota internet kita selamat!
                     resDownload.close()
-
-                    println("✅ AUTO-ABSEN SUKSES! (File tidak didownload, hanya trigger server)")
-                } else {
-                    println("⚠️ Tidak ada file materi di pertemuan ini. Mungkin dosen belum upload?")
                 }
-
             } catch (e: Exception) {
                 println("❌ Error saat mencoba absen siluman: ${e.message}")
             }
         }
     }
 
-    fun getMeetingDetail(meetingUrl: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val req = baseRequest.url(meetingUrl).build()
-            val res = webClient.newCall(req).execute()
-            val html = res.body.string()
-            val parser = Jsoup.parse(html)
+    fun getMeetingDetail(meetingUrl: String, isSwipe: Boolean = false) {
+        if (isDemo) {
+            viewModelScope.launch {
+                if (isSwipe) isRefreshing = true
+                else {
+                    isLoading = true
+                    meetingDetailUI = emptyList()
+                }
+                delay(1000)
 
-            val meetingFileList = mutableSetOf<String>()
-            for (element in parser.select("a[href*=force_download]")) {
-                meetingFileList.add(element.attr("href"))
+                meetingDetailUI = when (meetingUrl) {
+                    "link1" -> listOf(MeetingDetail("a","Slide_Pertemuan_1.pdf", "dummy_url"))
+                    "link2" -> listOf(MeetingDetail("a","Slide_Pertemuan_2.pdf", "dummy_url"))
+                    "link_ctrl_c" -> listOf(
+                        MeetingDetail("a","Cheatsheet_Prompt_AI.txt", "dummy_url"),
+                        MeetingDetail("a","Trik_Bypass_Plagiarisme.pdf", "dummy_url")
+                    )
+                    "link_tatanan_dunia" -> listOf(MeetingDetail("a","Dokumen_Deklarasi_Sunda_Empire.pdf", "dummy_url"))
+                    "link_empire" -> listOf(MeetingDetail("a","Peta_Wilayah_Kekuasaan_Sunda_Empire.pdf", "dummy_url"))
+                    else -> listOf(
+                        MeetingDetail("a","Materi_Random_Copas_Dari_Google.pdf", "dummy_url"),
+                        MeetingDetail("a","Presentasi_Hasil_Joki.pptx", "dummy_url")
+                    )
+                }
+                isRefreshing = false
+                isLoading = false
+            }
+            return
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            if (isSwipe) isRefreshing = true
+            else {
+                isLoading = true
+                meetingDetailUI = emptyList()
             }
 
-            val gMeetRedirect = parser.selectFirst("a[onclick*=kelas_gmeet]")?.attr("onclick")
-                ?.substringAfter("'")?.substringBefore("'") ?: ""
-            val gMeetUrl = if (gMeetRedirect.isNotEmpty()) {
-                val gMeetRedirectReq = baseRequest.url(gMeetRedirect).build()
-                val gMeetRedirectRes = webClient.newCall(gMeetRedirectReq).execute()
+            errorMessage = ""
+            try {
+                val req = Request.Builder().url(meetingUrl).get().build()
+                val res = webClient.newCall(req).execute()
+                val html = res.body.string()
+                val document = Jsoup.parse(html)
+                val rows = document.select("tbody tr")
+                val urlRegex = """(https?://[^\s'"]+)""".toRegex()
 
-                gMeetRedirectRes.body.string()
-            } else ""
+                val results = mutableListOf<MeetingDetail>()
 
-            val taskUrl = parser.selectFirst("a[href*=member_tugas]")?.attr("href")?: ""
+                for (row in rows) {
+                    val divs = row.select("div.col-md-4")
+                    if (divs.isEmpty()) continue
 
-            meetingDetailUI = MeetingDetail(taskUrl, gMeetUrl, meetingFileList.toList())
+                    val div1 = divs.getOrNull(0)
+                    val div2 = divs.getOrNull(1)
+
+                    val fullClass = div1?.selectFirst("a i")?.className() ?: ""
+                    val jenis = fullClass.split(" ").find { it.startsWith("fa-") } ?: "fa-file-o"
+
+                    val rawHtmlDiv1 = div1?.html() ?: ""
+                    var link = urlRegex.find(rawHtmlDiv1)?.value ?: "Link tidak ditemukan"
+
+                    if (link.contains("member_url")) {
+                        val requ = Request.Builder().url(link).get().build()
+                        val resp = webClient.newCall(requ).execute()
+                        val realLink = resp.body.string()
+
+                        if (realLink.isNotEmpty()) {
+                            link = realLink
+                        }
+                    }
+
+                    var deskripsi = div2?.text()?.trim()?.substringBeforeLast(".") ?: ""
+                    if (deskripsi.isEmpty()) {
+                        deskripsi = div1?.text()?.trim() ?: "Tidak ada deskripsi"
+                    }
+
+                    results.add(MeetingDetail(jenis, deskripsi, link))
+                }
+
+                meetingDetailUI = results
+            } catch (e: Exception) {
+                println(e.message)
+                if (meetingDetailUI.isEmpty()) errorMessage = e.message ?: "Gagal memuat detail pertemuan"
+                else _snackbarEvent.trySend(e.message ?: "Gagal memuat detail pertemuan")
+
+            }
+            isRefreshing = false
+            isLoading = false
         }
     }
 
-    fun getTaskDetail(taskUrl: String) {
-        viewModelScope.launch(Dispatchers.IO) {
-            val req = baseRequest.url(taskUrl).build()
-            val res = webClient.newCall(req).execute()
-            val html = res.body.string()
-            val parser = Jsoup.parse(html)
-
-            val message = parser.selectFirst("h4[class*=attachment-heading]")?.text() ?: ""
-            val taskFile = parser.selectFirst("a[href*=force_download]")?.attr("href") ?: ""
-            val taskSubmit = parser.selectFirst("a[href*=submit_tugas]")?.attr("href") ?: ""
-
-            taskDetailUI = TaskDetail(message, taskFile, taskSubmit)
-        }
-    }
-
-    fun downloadMateri(context: Context, fileUrl: String) {
+    fun executeDownload(context: Context, fileUrl: String) {
         viewModelScope.launch(Dispatchers.IO) {
             val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             val channelId = "download_channel"
-            val notifId = fileUrl.hashCode() // Bikin ID unik biar kalau download 2 file barengan notifnya pisah
+            val notifId = fileUrl.hashCode()
 
-            // Bikin "Channel" (Wajib untuk Android 8.0 ke atas)
             val channel = NotificationChannel(channelId, "Download Materi", NotificationManager.IMPORTANCE_LOW)
             notificationManager.createNotificationChannel(channel)
 
-            // Desain Awal Notifikasi (Mode Loading Mutar)
             val notifBuilder = NotificationCompat.Builder(context, channelId)
-                .setSmallIcon(android.R.drawable.stat_sys_download) // Icon panah bawah bawaan Android
+                .setSmallIcon(android.R.drawable.stat_sys_download)
                 .setContentTitle("Menyiapkan Download...")
-                .setOngoing(true) // Bikin notif nggak bisa di-swipe (dibuang) sama user
-                .setOnlyAlertOnce(true) // Biar HP nggak bunyi "Ting!" berkali-kali pas progres naik
-                .setProgress(100, 0, true) // True = loading muter-muter tanpa angka
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setProgress(100, 0, true)
 
             notificationManager.notify(notifId, notifBuilder.build())
 
             try {
-                println("📥 Memulai proses download dari: $fileUrl")
-
-                val req = baseRequest.url(fileUrl).build()
+                val req = Request.Builder().url(fileUrl).get().build()
                 val res = webClient.newCall(req).execute()
 
                 val fileName = res.request.url.toString().substringAfterLast("/")
 
-                // 3. SIAPKAN TEMPAT DI FOLDER "DOWNLOADS" HP (Standar Android Modern / Scoped Storage)
                 val resolver = context.contentResolver
                 val contentValues = ContentValues().apply {
                     put(MediaStore.Downloads.DISPLAY_NAME, fileName)
@@ -414,7 +629,6 @@ class Backend(application: Application) : AndroidViewModel(application) {
                     put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/LMS")
                 }
 
-                // Minta Android buatin file kosongnya
                 val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, contentValues)
 
                 if (uri != null) {
@@ -426,16 +640,14 @@ class Backend(application: Application) : AndroidViewModel(application) {
                         var downloadedBytes = 0L
                         var bytesRead = inputStream.read(buffer)
 
-                        // 🔥 TRIK RAHASIA: Timer biar HP nggak meledak!
                         var lastUpdateTime = System.currentTimeMillis()
 
-                        notifBuilder.setContentTitle(fileName) // Ubah judul notif jadi nama file
+                        notifBuilder.setContentTitle(fileName)
 
                         while (bytesRead != -1) {
-                            outputStream?.write(buffer, 0, bytesRead) // Tuang ke HP
+                            outputStream?.write(buffer, 0, bytesRead)
                             downloadedBytes += bytesRead
 
-                            // UPDATE NOTIFIKASI (Maksimal tiap 0.5 detik sekali)
                             val currentTime = System.currentTimeMillis()
                             if (totalBytes > 0L && currentTime - lastUpdateTime > 500) {
 
@@ -446,25 +658,20 @@ class Backend(application: Application) : AndroidViewModel(application) {
 
                                 notificationManager.notify(notifId, notifBuilder.build())
                                 lastUpdateTime = currentTime
-
                             }
-
-                            bytesRead = inputStream.read(buffer) // Sendok lagi...
+                            bytesRead = inputStream.read(buffer)
                         }
-
                     }
                 }
 
-                // 3. UBAH NOTIFIKASI JADI "SUKSES"
                 notifBuilder.setContentText("Download Selesai!")
-                    .setProgress(0, 0, false) // Hilangkan progress bar
-                    .setOngoing(false) // Boleh di-swipe/dibuang user
-                    .setSmallIcon(android.R.drawable.stat_sys_download_done) // Ganti icon centang
+                    .setProgress(0, 0, false)
+                    .setOngoing(false)
+                    .setSmallIcon(android.R.drawable.stat_sys_download_done)
 
                 notificationManager.notify(notifId, notifBuilder.build())
 
             } catch (e: Exception) {
-                // 4. UBAH NOTIFIKASI JADI "GAGAL"
                 notifBuilder.setContentTitle("Download Gagal")
                     .setContentText(e.message)
                     .setProgress(0, 0, false)
@@ -474,6 +681,365 @@ class Backend(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
+    fun getPresence(courseIndex: Int, isSwipe: Boolean = false) {
+        if (isDemo) {
+            viewModelScope.launch {
+                if (isSwipe) isRefreshing = true
+                else {
+                    isLoading = true
+                    presenceDetailUI = emptyList()
+                }
+                delay(1000)
+
+                when (courseIndex) {
+                    0 -> presenceDetailUI = listOf("link1", "link2", "link3", "dump", "", "dump", "", "dump")
+                    1 -> presenceDetailUI = List(8) { "dump" }
+                }
+                isRefreshing = false
+                isLoading = false
+            }
+            return
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            if (isSwipe) isRefreshing = true
+            else {
+                isLoading = true
+                presenceDetailUI = emptyList()
+            }
+            errorMessage = ""
+            try {
+                val kdJdw = cachePresence[courseIndex]
+
+                val payload = FormBody.Builder().add("kd_jdw", kdJdw).add("nim", nimCachePresence).build()
+                val req = Request.Builder().url("https://lms.unindra.ac.id/presensi/rekap_presensi_mhs").post(payload).build()
+                val res = webClient.newCall(req).execute()
+                val html = res.body.string()
+                val parser = Jsoup.parse(html)
+
+                val barisMahasiswa = parser.selectFirst("table.table-bordered tbody tr")
+
+                if (barisMahasiswa != null) {
+                    val semuaKolom = barisMahasiswa.select("td")
+                    val jumlahKolom = semuaKolom.size
+
+                    val listStatusHadir = mutableListOf<Boolean>()
+                    val indexPertemuanTerakhir = jumlahKolom - 2
+
+                    for (i in 3..indexPertemuanTerakhir) {
+                        val iconHadir = semuaKolom[i].selectFirst("i.fa-calendar-check-o")
+                        listStatusHadir.add(iconHadir != null)
+                    }
+
+                    val tempPresenceList = mutableListOf<String>()
+                    listStatusHadir.forEachIndexed { index, isHadir ->
+                        var presenceUrl = ""
+                        if (!isHadir) {
+                            val meetingUrl = lectureCourseUI[courseIndex].meetingList[index]
+                            val meetReq = Request.Builder().url(meetingUrl).get().build()
+                            val meetRes = webClient.newCall(meetReq).execute()
+                            val meetHtml = meetRes.body.string()
+                            val meetParser = Jsoup.parse(meetHtml)
+                            presenceUrl = meetParser.selectFirst("a[href*=force_download]")?.attr("href") ?: ""
+                        }
+                        tempPresenceList.add(presenceUrl)
+                    }
+                    presenceDetailUI = tempPresenceList
+                }
+            } catch (e: Exception) {
+                if (presenceDetailUI.isEmpty()) errorMessage = e.message ?: "Gagal memuat data presensi"
+                else _snackbarEvent.trySend(e.message ?: "Gagal memuat data presensi")
+            }
+            isRefreshing = false
+            isLoading = false
+        }
+    }
+
+    fun getAllTask(courseIndex: Int, isSwipe: Boolean = false) {
+        if (isDemo) {
+            viewModelScope.launch {
+                if (isSwipe) isRefreshing = true
+                else {
+                    isLoading = true
+                    taskDetailUI = emptyMap()
+                }
+                delay(1000)
+
+                when (courseIndex) {
+                    0 -> {
+                        taskDetailUI = mapOf(
+                            3 to TaskDetail(
+                                taskUrl = "link_rekening_orang_dalam",
+                                message = "Proyek Pengadaan Gorden Rumah Dinas: Anggaran 22 Miliar. Spesifikasi: Harus bisa menghalau sinar matahari dan nyinyiran netizen.",
+                                taskFile = "rab_fiktif_final_v2.xlsx",
+                                deadline = "10 Okt 2026 23:59:00",
+                                viewUrl = "",
+                                status = "active"
+                            ),
+                            4 to TaskDetail(
+                                taskUrl = "dummy",
+                                message = "Simulasi Menghadapi Hacker: Jika data bocor, cukup ganti password menjadi 'admin123' atau salahkan faktor cuaca.",
+                                taskFile = "sop_ngeles_nasional.pdf",
+                                deadline = "15 Okt 2026 10:00:00",
+                                viewUrl = "link_data_dijual_di_breachforums",
+                                status = "submitted"
+                            ),
+                            6 to TaskDetail(
+                                taskUrl = "link_pendaftaran_anak_emas",
+                                message = "Workshop Optimalisasi 'Orang Dalam': Cara cepat naik jabatan tanpa perlu kompetensi, cukup modal koneksi dan hobi main golf.",
+                                taskFile = "",
+                                deadline = "30 Okt 2026 15:00:00",
+                                viewUrl = "",
+                                status = "active"
+                            )
+                        )
+                    }
+                }
+                isRefreshing = false
+                isLoading = false
+            }
+            return
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            if (isSwipe) isRefreshing = true
+            else {
+                isLoading = true
+                taskDetailUI = emptyMap()
+            }
+            errorMessage = ""
+
+            try {
+                val temp = mutableMapOf<Int, TaskDetail>()
+                lectureCourseUI[courseIndex].meetingList.forEachIndexed { index, meetingUrl ->
+                    val req = Request.Builder().url(meetingUrl).get().build()
+                    val res = webClient.newCall(req).execute()
+                    val html = res.body.string()
+                    val parser = Jsoup.parse(html)
+
+                    val taskUrl = parser.selectFirst("a[href*=member_tugas]")?.attr("href")
+                        ?: return@forEachIndexed
+
+                    val taskReq = Request.Builder().url(taskUrl).get().build()
+                    val taskRes = webClient.newCall(taskReq).execute()
+                    val taskHtml = taskRes.body.string()
+                    val taskParser = Jsoup.parse(taskHtml)
+
+                    val message = taskParser.selectFirst("div[style*=padding-left]")?.text()?.trim() ?: ""
+
+                    val docx = taskParser.selectFirst("a[href*=force_download]")?.attr("href")
+
+                    val pdf = taskParser.selectFirst("div.callout-white-default")
+                        ?.selectFirst("a[onclick*=lihat_pdf]")?.attr("onclick")
+                        ?.substringAfter("'")?.substringBefore("'")
+                    val pdfUrl = "https://lms.unindra.ac.id/media_public/lihat_pdf/$pdf"
+
+                    val pict = taskParser.selectFirst("a[onclick*=lihat_gambar]")?.attr("onclick")
+                        ?.substringAfter("'")?.substringBefore("'")
+                    val pictUrl = "https://lms.unindra.ac.id/media_public/lihat_gambar/$pict"
+
+                    val taskFile = if (pdf != null) pdfUrl else if (pict != null) pictUrl else docx ?: ""
+
+                    val table = taskParser.select("table.table-bordered tr")
+                    var deadline = String()
+                    for (element in table) {
+                        val header = element.selectFirst("th")?.text()
+                        if (header != "Akhir Submit") continue
+                        deadline = element.selectFirst("td")?.text() ?: ""
+                        break
+                    }
+
+                    val element = taskParser.selectFirst("div.callout-white-warning")
+                        ?.selectFirst("a[onclick*=lihat_pdf]")?.attr("onclick")
+                        ?.substringAfter("'")?.substringBefore("'")
+                    val viewUrl = if (element != null) "https://lms.unindra.ac.id/media_public/lihat_pdf/$element" else ""
+
+                    val status = when {
+                        taskHtml.contains("Sudah Submit") -> "submitted"
+                        taskHtml.contains("Waktu Submit sudah berakhir") -> "expired"
+                        else -> "active"
+                    }
+
+                    temp[index] = TaskDetail(taskUrl, message, taskFile, deadline, viewUrl, status)
+                }
+                taskDetailUI = temp
+            } catch (e: Exception) {
+                if (taskDetailUI.isEmpty()) errorMessage = e.message ?: "Gagal memuat data tugas"
+                else _snackbarEvent.trySend(e.message ?: "Gagal memuat data tugas")
+            }
+            isRefreshing = false
+            isLoading = false
+        }
+    }
+
+    fun submitTask(context: Context, uri: Uri, taskUrl: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            isLoading = true
+            isUploading = true
+            uploadProgress = 0f
+            uploadFileName = "Menyiapkan file..."
+
+            val contentResolver = context.contentResolver
+            val cursor = contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)
+            
+            var fileName = "Tugas"
+            val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            val channelId = "upload_channel"
+            var notifId = fileName.hashCode()
+            var notifBuilder: NotificationCompat.Builder? = null
+            
+            try {
+                if (cursor == null || !cursor.moveToFirst() || cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME) < 0 ||cursor.getColumnIndex(OpenableColumns.SIZE) < 0) {
+                    _snackbarEvent.trySend("gagal mendapatkan informasi file")
+                    return@launch
+                }
+
+                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                fileName = cursor.getString(nameIndex)
+                uploadFileName = fileName
+                notifId = fileName.hashCode()
+                
+                val channel = NotificationChannel(channelId, "Upload Materi", NotificationManager.IMPORTANCE_LOW)
+                notificationManager.createNotificationChannel(channel)
+
+                notifBuilder = NotificationCompat.Builder(context, channelId)
+                    .setSmallIcon(android.R.drawable.stat_sys_upload)
+                    .setContentTitle("Mengunggah Tugas...")
+                    .setContentText(fileName)
+                    .setOngoing(true)
+                    .setOnlyAlertOnce(true)
+                    .setProgress(100, 0, true)
+
+                notificationManager.notify(notifId, notifBuilder.build())
+
+                val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+                val fileSize = cursor.getLong(sizeIndex)
+                if (fileSize > 20 * 1024 * 1024) {
+                    _snackbarEvent.trySend("ukuran file melebihi 20MB")
+                    
+                    notifBuilder.setContentTitle("Upload Gagal")
+                        .setContentText("Ukuran file melebihi 20MB")
+                        .setProgress(0, 0, false)
+                        .setOngoing(false)
+                    notificationManager.notify(notifId, notifBuilder.build())
+                    
+                    return@launch
+                }
+
+                val mimeType = contentResolver.getType(uri)!!
+                val extension = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType)
+
+                val uriRequestBody = object : RequestBody() {
+                    override fun contentType() = null
+
+                    override fun contentLength() = fileSize
+
+                    override fun writeTo(sink: BufferedSink) {
+                        contentResolver.openInputStream(uri)!!.use { inputStream ->
+                            val buffer = ByteArray(8 * 1024)
+                            var uploadedBytes = 0L
+                            var bytesRead = inputStream.read(buffer)
+                            var lastUpdateTime = System.currentTimeMillis()
+
+                            while (bytesRead != -1) {
+                                sink.write(buffer, 0, bytesRead)
+                                uploadedBytes += bytesRead
+
+                                val currentTime = System.currentTimeMillis()
+                                if (fileSize > 0L && currentTime - lastUpdateTime > 500) {
+                                    val progress = (uploadedBytes * 100 / fileSize).toInt()
+
+                                    notifBuilder.setProgress(100, progress, false)
+                                        .setContentText("Mengunggah $progress%")
+
+                                    notificationManager.notify(notifId, notifBuilder.build())
+                                    
+                                    uploadProgress = progress / 100f
+                                    lastUpdateTime = currentTime
+                                }
+                                bytesRead = inputStream.read(buffer)
+                            }
+                        }
+                    }
+                }
+
+                val reqForm = Request.Builder().url(taskUrl).get().build()
+                val resForm = webClient.newCall(reqForm).execute()
+                val htmlForm = resForm.body.string()
+                val parserForm = Jsoup.parse(htmlForm)
+
+                val idTugas = parserForm.selectFirst("input[name=h_id_tugas]")?.attr("value")
+                val hKode = parserForm.selectFirst("input[name=h_kode]")?.attr("value")
+                val idAktifitas = parserForm.selectFirst("input[name=h_id_aktifitas]")?.attr("value")
+                if (idTugas == null || hKode == null || idAktifitas == null) {
+                    _snackbarEvent.trySend("payload tidak ditemukan")
+                    
+                    notifBuilder.setContentTitle("Upload Gagal")
+                        .setContentText("Payload tidak ditemukan")
+                        .setProgress(0, 0, false)
+                        .setOngoing(false)
+                    notificationManager.notify(notifId, notifBuilder.build())
+                    
+                    return@launch
+                }
+
+                val requestBody = MultipartBody.Builder()
+                    .setType(MultipartBody.FORM)
+                    .addFormDataPart("h_id_tugas", idTugas)
+                    .addFormDataPart("h_kode", hKode)
+                    .addFormDataPart("h_id_aktifitas", idAktifitas)
+                    .addFormDataPart("myfile", "upload.$extension", uriRequestBody)
+                    .build()
+
+                val uploadReq = Request.Builder()
+                    .url("https://lms.unindra.ac.id/member_tugas/mhs_upload_file_proses")
+                    .post(requestBody)
+                    .build()
+
+                val uploadRes = webClient.newCall(uploadReq).execute()
+
+                val balasanServer = uploadRes.body.string()
+                println("Status Upload: $balasanServer")
+                
+                _snackbarEvent.trySend("Tugas Berhasil Dikumpulkan!")
+                
+                uploadProgress = 1f
+                notifBuilder.setContentTitle("Upload Selesai!")
+                    .setContentText(fileName)
+                    .setProgress(0, 0, false)
+                    .setOngoing(false)
+                    .setSmallIcon(android.R.drawable.stat_sys_upload_done)
+
+                notificationManager.notify(notifId, notifBuilder.build())
+
+            } catch (e: Exception) {
+                errorMessage = e.message ?: "Gagal upload file"
+                _snackbarEvent.trySend(errorMessage)
+                
+                notifBuilder?.setContentTitle("Upload Gagal")
+                    ?.setContentText(e.message)
+                    ?.setProgress(0, 0, false)
+                    ?.setOngoing(false)
+                
+                if (notifBuilder != null) {
+                    notificationManager.notify(notifId, notifBuilder.build())
+                }
+            } finally {
+                cursor?.close()
+                isLoading = false
+                isUploading = false
+            }
+
+        }
+    }
+}
+
+sealed class LoginResult {
+    data class Success(val html: String) : LoginResult()
+    object WrongPassword : LoginResult()
+    object WrongCaptcha : LoginResult()
+    data class Error(val message: String) : LoginResult()
 }
 
 data class StudentProfile(
@@ -487,15 +1053,14 @@ data class LectureCourse(
     val courseCode: String, val courseName: String,
     val day: String, val clock: String, val room: String,
     val lecturerName: String, val lecturerHp: String, val lecturerPhoto: String,
-    val meetingList: List<String>
+    val persen: String, val meetingList: List<String>
 )
-data class MeetingDetail(
-    val taskUrl: String = "",
-    val gMeetUrl: String = "",
-    val meetingFileList: List<String> = emptyList()
-)
+data class MeetingDetail(val type: String, val desc: String, val url: String)
 data class TaskDetail(
+    val taskUrl: String,
     val message: String,
     val taskFile: String,
-    val taskSubmit: String
+    val deadline: String,
+    val viewUrl: String,
+    val status: String
 )

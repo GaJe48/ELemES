@@ -1,121 +1,228 @@
 package com.example.lmsunindra
 
-import androidx.compose.animation.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CalendarMonth
+import androidx.compose.material.icons.filled.MeetingRoom
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Timer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
+import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
+import dev.chrisbanes.haze.hazeEffect
+import dev.chrisbanes.haze.hazeSource
+import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
+import dev.chrisbanes.haze.materials.HazeMaterials
+import dev.chrisbanes.haze.rememberHazeState
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalHazeMaterialsApi::class, ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 fun MeetingList(
     viewModel: Backend,
-    courseCode: String,
+    courseIndex: Int,
     onBackClick: () -> Unit,
     onMeetingClick: (String) -> Unit
 ) {
-    val matkul = viewModel.lectureCourseUI.find { it.courseCode == courseCode }
-    val isLoading = viewModel.isLoading
-    val snackbarHostState = remember { SnackbarHostState() }
-    val scope = rememberCoroutineScope()
+    val matkul = viewModel.lectureCourseUI[courseIndex]
+    val hazeState = rememberHazeState()
+    val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
+    val state = rememberPullToRefreshState()
 
-    Scaffold(
-        topBar = {
-            MediumTopAppBar(
-                title = {
-                    Column {
-                        Text(matkul?.courseName ?: "Detail Kelas", maxLines = 1)
-                        Text(
-                            matkul?.courseCode ?: "",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                },
-                navigationIcon = {
-                    IconButton(onClick = onBackClick) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                }
-            )
-        },
-        snackbarHost = { SnackbarHost(snackbarHostState) }
-    ) { paddingValues ->
-
-        if (matkul == null) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                Text("Kelas tidak ditemukan")
-            }
-            return@Scaffold
-        }
-
-        LazyColumn(
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.surface)
+    ) {
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(paddingValues),
-            contentPadding = PaddingValues(20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            item {
-                ElevatedCard(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = CardDefaults.elevatedCardColors(
-                        containerColor = MaterialTheme.colorScheme.secondaryContainer
-                    )
-                ) {
-                    Column(modifier = Modifier.padding(20.dp)) {
-                        Text(
-                            "Informasi Kelas",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                .background(
+                    Brush.verticalGradient(
+                        colors = listOf(
+                            MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f),
+                            MaterialTheme.colorScheme.surface
                         )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text("👨‍🏫 ${matkul.lecturerName}", fontWeight = FontWeight.Bold)
-                        Text("📅 ${matkul.day}, ${matkul.clock}", style = MaterialTheme.typography.bodyMedium)
-                        Text("📍 Ruang: ${matkul.room}", style = MaterialTheme.typography.bodyMedium)
+                    )
+                )
+        )
+
+        PullToRefreshBox(
+            isRefreshing = viewModel.isRefreshing,
+            state = state,
+            onRefresh = { viewModel.refreshDashboard() },
+            contentAlignment = Alignment.TopCenter,
+            indicator = {
+                PullToRefreshDefaults.LoadingIndicator(
+                    state = state,
+                    isRefreshing = viewModel.isRefreshing,
+                    modifier = Modifier.padding(top = 16.dp)
+                )
+            }
+        ) {
+            Scaffold(
+                modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection),
+                containerColor = Color.Transparent,
+                topBar = {
+                    LargeTopAppBar(
+                        scrollBehavior = scrollBehavior,
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = Color.Transparent,
+                            scrolledContainerColor = Color.Transparent
+                        ),
+                        modifier = Modifier.hazeEffect(
+                            state = hazeState,
+                            style = HazeMaterials.ultraThin()
+                        ),
+                        title = {
+                            Column {
+                                Text(
+                                    text = matkul.courseName,
+                                    style = MaterialTheme.typography.headlineMedium,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                Text(
+                                    text = matkul.courseCode,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        },
+                        navigationIcon = {
+                            IconButton(
+                                onClick = onBackClick,
+                                modifier = Modifier
+                                    .padding(start = 8.dp, end = 8.dp)
+                                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f), CircleShape)
+                            ) {
+                                Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                            }
+                        }
+                    )
+                }
+            ) { paddingValues ->
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .hazeSource(hazeState),
+                    contentPadding = PaddingValues(
+                        top = paddingValues.calculateTopPadding() + 16.dp,
+                        bottom = 24.dp,
+                        start = 20.dp,
+                        end = 20.dp
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(20.dp)
+                ) {
+                    item {
+                        ElevatedCard(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(32.dp),
+                            colors = CardDefaults.elevatedCardColors(
+                                containerColor = MaterialTheme.colorScheme.secondaryContainer
+                            )
+                        ) {
+                            Column(modifier = Modifier.padding(24.dp)) {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Surface(
+                                        shape = CircleShape,
+                                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.1f),
+                                        modifier = Modifier.size(48.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Person,
+                                            contentDescription = null,
+                                            modifier = Modifier.padding(12.dp),
+                                            tint = MaterialTheme.colorScheme.onSecondaryContainer
+                                        )
+                                    }
+                                    Spacer(modifier = Modifier.width(16.dp))
+                                    Column {
+                                        Text(
+                                            text = matkul.lecturerName,
+                                            style = MaterialTheme.typography.titleMedium,
+                                            fontWeight = FontWeight.Bold,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                                        )
+                                        Text(
+                                            text = matkul.lecturerHp.ifEmpty { "Nomor HP tidak tersedia" },
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
+                                        )
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.height(20.dp))
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                ) {
+                                    val chipColor = MaterialTheme.colorScheme.onSecondaryContainer
+                                    InfoChip(icon = Icons.Default.CalendarMonth, text = matkul.day,
+                                        containerColor = chipColor.copy(alpha = 0.1f), contentColor = chipColor, fontWeight = FontWeight.Bold)
+                                    InfoChip(icon = Icons.Default.Timer, text = matkul.clock,
+                                        containerColor = chipColor.copy(alpha = 0.1f), contentColor = chipColor, fontWeight = FontWeight.Bold)
+                                    InfoChip(icon = Icons.Default.MeetingRoom, text = matkul.room,
+                                        containerColor = chipColor.copy(alpha = 0.1f), contentColor = chipColor, fontWeight = FontWeight.Bold)
+                                }
+                            }
+                        }
+                    }
+
+                    if (matkul.meetingList.isEmpty()) {
+                        item {
+                            Box(
+                                modifier = Modifier.fillParentMaxWidth().fillParentMaxHeight(0.7f),
+                                contentAlignment = Alignment.Center
+                            ) { EmptyGif(label = "Belum ada daftar pertemuan") }
+                        }
+                    } else {
+                        item {
+                            Text(
+                                text = "Daftar Pertemuan",
+                                style = MaterialTheme.typography.headlineSmall,
+                                fontWeight = FontWeight.Black,
+                                modifier = Modifier.padding(vertical = 8.dp)
+                            )
+                        }
+
+                        itemsIndexed(matkul.meetingList) { index, pertemuan ->
+                            MeetingExpressiveItem(
+                                index = index + 1,
+                                onItemClick = { onMeetingClick(pertemuan) },
+                            )
+                        }
                     }
                 }
-            }
-
-            item {
-                Text(
-                    "Daftar Pertemuan",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.ExtraBold,
-                    modifier = Modifier.padding(vertical = 8.dp)
-                )
-            }
-
-            itemsIndexed(matkul.meetingList) { index, pertemuan ->
-                MeetingItem(
-                    index = index + 1,
-                    onItemClick = { onMeetingClick(pertemuan) },
-                    onAbsenClick = {
-                        // We'll update ViewModel to handle results
-                        viewModel.autoAbsenPertemuan(pertemuan)
-                    }
-                )
             }
         }
     }
 }
 
 @Composable
-fun MeetingItem(index: Int, onItemClick: () -> Unit, onAbsenClick: () -> Unit) {
+fun MeetingExpressiveItem(index: Int, onItemClick: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(20.dp),
+        shape = RoundedCornerShape(28.dp),
         onClick = onItemClick,
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
@@ -123,44 +230,40 @@ fun MeetingItem(index: Int, onItemClick: () -> Unit, onAbsenClick: () -> Unit) {
         elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
     ) {
         Row(
-            modifier = Modifier.padding(16.dp).fillMaxWidth(),
+            modifier = Modifier.padding(20.dp).fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.weight(1f)) {
                 Surface(
-                    shape = RoundedCornerShape(12.dp),
+                    shape = RoundedCornerShape(16.dp),
                     color = MaterialTheme.colorScheme.primaryContainer,
-                    modifier = Modifier.size(40.dp)
+                    modifier = Modifier.size(52.dp)
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Text(
                             text = index.toString(),
-                            fontWeight = FontWeight.Bold,
+                            style = MaterialTheme.typography.titleLarge,
+                            fontWeight = FontWeight.Black,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )
                     }
                 }
                 Spacer(modifier = Modifier.width(16.dp))
-                Text(
-                    text = "Pertemuan $index",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold
-                )
-            }
-
-            Button(
-                onClick = onAbsenClick,
-                shape = RoundedCornerShape(12.dp),
-                contentPadding = PaddingValues(horizontal = 16.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.tertiary
-                )
-            ) {
-                Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Absen", fontWeight = FontWeight.Bold)
+                Column {
+                    Text(
+                        text = "Pertemuan $index",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.ExtraBold
+                    )
+                    Text(
+                        text = "Ketuk untuk mendapatkan file materi",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
 }
+
