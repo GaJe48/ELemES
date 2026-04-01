@@ -1,4 +1,4 @@
-package com.example.lmsunindra
+package com.gaje48.elemes
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -56,7 +56,7 @@ import kotlin.math.roundToInt
 @Preview
 @Composable
 fun PreviewDashboard() {
-    val dummyProfile = StudentProfile(
+    val dummyProfile = StudentInfo(
         studentName = "Abi Musa Abdurrahman",
         npm = "202443500660",
         studyProgram = "Teknik Informatika S1",
@@ -64,7 +64,7 @@ fun PreviewDashboard() {
         studentPhoto = ""
     )
 
-    val dummyCourse = LectureCourse(
+    val dummyCourse = CourseInfo(
         courseCode = "TIF123",
         courseName = "Pemrograman Mobile",
         day = "Senin",
@@ -73,8 +73,8 @@ fun PreviewDashboard() {
         lecturerName = "Pak Dosen",
         lecturerHp = "0812345",
         lecturerPhoto = "",
-        "",
-        meetingList = emptyList()
+        presenceInfo = PresenceInfo(16, 80, "12345"),
+        meetingList = emptyMap()
     )
 
     val dummyList = listOf(dummyCourse, dummyCourse, dummyCourse, dummyCourse, dummyCourse)
@@ -115,8 +115,8 @@ fun Dashboard(
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class, ExperimentalHazeMaterialsApi::class)
 @Composable
 fun DashboardContent(
-    studentProfile: StudentProfile,
-    lectureCourse: List<LectureCourse>,
+    studentProfile: StudentInfo,
+    lectureCourse: List<CourseInfo>,
     isRefreshing: Boolean,
     onRefresh: () -> Unit,
     onCourseClick: (Int) -> Unit,
@@ -330,7 +330,7 @@ fun DashboardContent(
 @Composable
 fun CourseExpressiveCard(
     courseIndex: Int,
-    course: LectureCourse,
+    course: CourseInfo,
     onCourseClick: (Int) -> Unit,
     onPresenceClick: (Int) -> Unit,
     onTaskClick: (Int) -> Unit
@@ -390,8 +390,8 @@ fun CourseExpressiveCard(
 
             Spacer(modifier = Modifier.height(16.dp))
             AttendanceGraph(
-                meetingList = course.meetingList,
-                persenHadirStr = course.persen // Asumsi parameter barumu bernama ini
+                jumlahPertemuan = course.presenceInfo.jumlahPertemuan,
+                percentage = course.presenceInfo.persen
             )
 
             Spacer(modifier = Modifier.height(20.dp))
@@ -477,23 +477,20 @@ fun InfoChip(
 }
 
 @Composable
-fun AttendanceGraph(meetingList: List<String>, persenHadirStr: String) {
-    // 1. Ambil jumlah pertemuan dari ukuran list
-    val currentMeeting = meetingList.size
-    val percentage = persenHadirStr.replace("%", "").toDoubleOrNull() ?: 0.0
+fun AttendanceGraph(jumlahPertemuan: Int, percentage: Int) {
 
     // 2. Hitung jumlah kehadiran berdasarkan persentase
     // Misal: current = 5, persen = 80%, maka hadir = 4, alpa = 1
-    val attendedCount = ((percentage / 100.0) * currentMeeting).roundToInt()
-    val missedCount = maxOf(0, currentMeeting - attendedCount)
+    val attendedCount = ((percentage / 100.0) * jumlahPertemuan).roundToInt()
+    val missedCount = maxOf(0, jumlahPertemuan - attendedCount)
 
     // 3. Hitung sisa pertemuan (Asumsi 1 semester = 16 pertemuan)
     val totalMeetings = TOTAL_SEMESTER_MEETINGS
-    val upcomingCount = maxOf(0, totalMeetings - currentMeeting)
+    val upcomingCount = maxOf(0, totalMeetings - jumlahPertemuan)
 
     Column(modifier = Modifier.fillMaxWidth()) {
         Text(
-            text = "Kehadiran $persenHadirStr ($attendedCount/$currentMeeting)",
+            text = "Kehadiran $percentage% ($attendedCount/$jumlahPertemuan)",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontWeight = FontWeight.Bold

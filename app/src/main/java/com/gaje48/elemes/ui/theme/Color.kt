@@ -1,4 +1,4 @@
-package com.example.lmsunindra.ui.theme
+package com.gaje48.elemes.ui.theme
 
 import androidx.compose.ui.graphics.Color
 

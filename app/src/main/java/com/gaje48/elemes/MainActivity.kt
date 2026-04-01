@@ -1,4 +1,4 @@
-package com.example.lmsunindra
+package com.gaje48.elemes
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -30,7 +30,7 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
-import com.example.lmsunindra.ui.theme.LMSUnindraTheme
+import com.gaje48.elemes.ui.theme.LMSUnindraTheme
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {

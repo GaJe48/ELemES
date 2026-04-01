@@ -1,4 +1,4 @@
-package com.example.lmsunindra
+package com.gaje48.elemes
 
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -235,15 +235,15 @@ fun TaskExpressiveCard(
     onSubmitClick: () -> Unit
 ) {
     val statusColor = when (task.status) {
-        "submitted" -> MaterialTheme.colorScheme.primary
-        "expired" -> MaterialTheme.colorScheme.error
-        else -> MaterialTheme.colorScheme.secondary
+        TaskStatus.SUBMITTED  -> MaterialTheme.colorScheme.primary
+        TaskStatus.EXPIRED -> MaterialTheme.colorScheme.error
+        TaskStatus.ACTIVE -> MaterialTheme.colorScheme.secondary
     }
 
     val statusLabel = when (task.status) {
-        "submitted" -> "Sudah Dikumpulkan"
-        "expired" -> "Waktu Berakhir"
-        else -> "Belum Dikumpulkan"
+        TaskStatus.SUBMITTED -> "Sudah Dikumpulkan"
+        TaskStatus.EXPIRED -> "Waktu Berakhir"
+        TaskStatus.ACTIVE -> "Belum Dikumpulkan"
     }
 
     ElevatedCard(
@@ -359,7 +359,7 @@ fun TaskExpressiveCard(
                 }
             }
 
-            if (task.status == "submitted" || task.status == "active") {
+            if (task.status == TaskStatus.SUBMITTED || task.status == TaskStatus.ACTIVE) {
                 Spacer(modifier = Modifier.height(12.dp))
                 Button(
                     onClick = onSubmitClick,
@@ -369,7 +369,7 @@ fun TaskExpressiveCard(
                 ) {
                     Icon(Icons.Default.FileUpload, null)
                     Spacer(modifier = Modifier.width(8.dp))
-                    Text(if (task.status == "submitted") "Revisi Tugas" else "Kumpulkan Tugas", fontWeight = FontWeight.ExtraBold)
+                    Text(if (task.status == TaskStatus.SUBMITTED) "Revisi Tugas" else "Kumpulkan Tugas", fontWeight = FontWeight.ExtraBold)
                 }
             }
         }

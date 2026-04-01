@@ -1,4 +1,4 @@
-package com.example.lmsunindra
+package com.gaje48.elemes
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -21,6 +21,10 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -43,7 +47,9 @@ fun LayarRekapAbsen(
 ) {
     val dataAbsen = viewModel.presenceDetailUI
     val isLoading = viewModel.isLoading
+    val isPresenceSubmitting = viewModel.isPresenceSubmitting
     val matkul = viewModel.lectureCourseUI[courseIndex]
+    var activePresenceUrl by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(courseIndex) {
         viewModel.getPresence(courseIndex)
@@ -54,10 +60,18 @@ fun LayarRekapAbsen(
         dataAbsen = dataAbsen,
         errorMessage = viewModel.errorMessage,
         isLoading = isLoading,
+        isPresenceSubmitting = isPresenceSubmitting,
+        activePresenceUrl = activePresenceUrl,
         isRefreshing = viewModel.isRefreshing,
         onRefresh = { viewModel.getPresence(courseIndex, isSwipe = true) },
         onRetry = { viewModel.getPresence(courseIndex) },
-        onAbsenClick = { url -> viewModel.executePresence(url) },
+        onAbsenClick = { url ->
+            activePresenceUrl = url
+            viewModel.executePresence(url) {
+                activePresenceUrl = null
+                viewModel.getPresence(courseIndex)
+            }
+        },
         onBackClick = onBackClick
     )
 }
@@ -66,9 +80,11 @@ fun LayarRekapAbsen(
 @Composable
 fun LayarRekapAbsenStateless(
     courseName: String,
-    dataAbsen: List<String>,
+    dataAbsen: List<StatusPresensi>,
     errorMessage: String,
     isLoading: Boolean,
+    isPresenceSubmitting: Boolean,
+    activePresenceUrl: String?,
     isRefreshing: Boolean,
     onRefresh: () -> Unit,
     onRetry: () -> Unit,
@@ -216,13 +232,13 @@ fun LayarRekapAbsenStateless(
                                             color = MaterialTheme.colorScheme.onSecondaryContainer
                                         )
                                         Text(
-                                            "${dataAbsen.count { it.isEmpty() }} dari ${dataAbsen.size} Pertemuan",
+                                            "${dataAbsen.count { it is StatusPresensi.SudahHadir }} dari ${dataAbsen.size} Pertemuan",
                                             style = MaterialTheme.typography.bodyMedium,
                                             color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
                                         )
                                     }
                                     Text(
-                                        text = "${(dataAbsen.count { it.isEmpty() } * 100 / dataAbsen.size)}%",
+                                        text = "${(dataAbsen.count { it is StatusPresensi.SudahHadir } * 100 / dataAbsen.size)}%",
                                         style = MaterialTheme.typography.displaySmall,
                                         fontWeight = FontWeight.Black,
                                         color = MaterialTheme.colorScheme.primary,
@@ -282,11 +298,20 @@ fun LayarRekapAbsenStateless(
                             )
                         }
 
-                        itemsIndexed(dataAbsen) { index, presenceUrl ->
+                        itemsIndexed(dataAbsen) { index, status ->
                             KotakPertemuanExpressive(
                                 pertemuanKe = index + 1,
-                                isHadir = presenceUrl.isEmpty(),
-                                onAbsenClick = { onAbsenClick(presenceUrl) }
+                                status = status,
+                                isSubmitting = status is StatusPresensi.BelumHadirAdaLink &&
+                                    isPresenceSubmitting &&
+                                    status.linkDownload == activePresenceUrl,
+                                isActionEnabled = !isPresenceSubmitting,
+                                onAbsenClick = {
+                                    // Pengecekan aman (Smart Cast)
+                                    if (status is StatusPresensi.BelumHadirAdaLink) {
+                                        onAbsenClick(status.linkDownload)
+                                    }
+                                }
                             )
                         }
                     }
@@ -299,14 +324,16 @@ fun LayarRekapAbsenStateless(
 @Composable
 fun KotakPertemuanExpressive(
     pertemuanKe: Int,
-    isHadir: Boolean,
+    status: StatusPresensi,
+    isSubmitting: Boolean,
+    isActionEnabled: Boolean,
     onAbsenClick: () -> Unit
 ) {
-    val containerColor = if (isHadir)
+    val containerColor = if (status is StatusPresensi.SudahHadir)
         MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
     else MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
 
-    val contentColor = if (isHadir)
+    val contentColor = if (status is StatusPresensi.SudahHadir)
         MaterialTheme.colorScheme.primary
     else MaterialTheme.colorScheme.error
 
@@ -334,22 +361,13 @@ fun KotakPertemuanExpressive(
                     color = contentColor.copy(alpha = 0.7f),
                     letterSpacing = 2.sp
                 )
-                
-                if (isHadir) {
-                    Icon(
-                        imageVector = Icons.Default.CheckCircle, 
-                        contentDescription = null, 
-                        modifier = Modifier.size(16.dp), 
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                } else {
-                    Icon(
-                        imageVector = Icons.Default.Warning, 
-                        contentDescription = null, 
-                        modifier = Modifier.size(16.dp), 
-                        tint = MaterialTheme.colorScheme.error
-                    )
-                }
+
+                Icon(
+                    imageVector = if (status is StatusPresensi.SudahHadir) Icons.Default.CheckCircle else Icons.Default.Warning,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = contentColor
+                )
             }
 
             Text(
@@ -359,30 +377,57 @@ fun KotakPertemuanExpressive(
                 color = contentColor
             )
 
-            if (isHadir) {
-                Box(
-                    modifier = Modifier.fillMaxWidth().height(36.dp),
-                    contentAlignment = Alignment.CenterStart
-                ) {
-                    Text(
-                        "Telah Hadir", 
-                        style = MaterialTheme.typography.labelMedium, 
-                        fontWeight = FontWeight.Bold, 
-                        color = MaterialTheme.colorScheme.primary
-                    )
+            when (status) {
+                is StatusPresensi.SudahHadir -> {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().height(36.dp),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        Text(
+                            "Telah Hadir",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    }
                 }
-            } else {
-                Button(
-                    onClick = onAbsenClick,
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.error,
-                        contentColor = MaterialTheme.colorScheme.onError
-                    ),
-                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
-                    modifier = Modifier.fillMaxWidth().height(36.dp)
-                ) {
-                    Text("Isi Absen", fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                is StatusPresensi.BelumHadirAdaLink -> {
+                    Button(
+                        onClick = onAbsenClick,
+                        enabled = isActionEnabled,
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.error,
+                            contentColor = MaterialTheme.colorScheme.onError
+                        ),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+                        modifier = Modifier.fillMaxWidth().height(36.dp)
+                    ) {
+                        if (isSubmitting) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = MaterialTheme.colorScheme.onError
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text("Mengisi...", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        } else {
+                            Text("Isi Absen", fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                        }
+                    }
+                }
+                is StatusPresensi.BelumHadirTanpaLink -> {
+                    Box(
+                        modifier = Modifier.fillMaxWidth().height(36.dp),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        Text(
+                            "Tidak Ada Link Absen",
+                            style = MaterialTheme.typography.labelMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
             }
         }
@@ -395,9 +440,11 @@ fun PreviewLayarRekapAbsen() {
     MaterialTheme {
         LayarRekapAbsenStateless(
             courseName = "Pemrograman Visual Lanjut",
-            dataAbsen = listOf("", "", "a", "", "", "a"),
+            dataAbsen = listOf(StatusPresensi.SudahHadir, StatusPresensi.BelumHadirTanpaLink, StatusPresensi.BelumHadirAdaLink("")),
             errorMessage = "",
             isLoading = false,
+            isPresenceSubmitting = false,
+            activePresenceUrl = null,
             isRefreshing = false,
             onRefresh = {},
             onRetry = {},

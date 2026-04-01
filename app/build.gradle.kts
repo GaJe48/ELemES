@@ -4,13 +4,13 @@ plugins {
 }
 
 android {
-    namespace = "com.example.lmsunindra"
+    namespace = "com.gaje48.elemes"
     compileSdk {
         version = release(36)
     }
 
     defaultConfig {
-        applicationId = "com.example.lmsunindra"
+        applicationId = "com.gaje48.elemes"
         minSdk = 29
         targetSdk = 36
         versionCode = 1
@@ -21,7 +21,8 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -34,6 +35,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -63,4 +65,6 @@ dependencies {
     implementation(libs.androidx.material3)
     implementation(libs.haze)
     implementation(libs.haze.materials)
+    implementation(libs.androidx.security.crypto)
+    implementation(libs.kotlinx.coroutines.play.services)
 }

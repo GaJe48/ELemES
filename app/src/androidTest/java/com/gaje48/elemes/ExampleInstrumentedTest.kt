@@ -1,4 +1,4 @@
-package com.example.lmsunindra
+package com.gaje48.elemes
 
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.ext.junit.runners.AndroidJUnit4

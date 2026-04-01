@@ -1,4 +1,4 @@
-package com.example.lmsunindra
+package com.gaje48.elemes
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
