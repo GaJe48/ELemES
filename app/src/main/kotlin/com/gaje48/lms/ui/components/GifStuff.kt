@@ -1,4 +1,4 @@
-package com.gaje48.elemes
+package com.gaje48.lms.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import coil.ImageLoader
 import coil.compose.AsyncImage
 import coil.decode.ImageDecoderDecoder
+import com.gaje48.lms.R
 
 @Composable
 private fun rememberGifImageLoader(): ImageLoader {

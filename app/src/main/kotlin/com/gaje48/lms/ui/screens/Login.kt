@@ -1,28 +1,63 @@
-package com.gaje48.elemes
+package com.gaje48.lms.ui.screens
 
-import androidx.compose.animation.*
-import androidx.compose.foundation.layout.*
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.gaje48.lms.ui.components.LoadingGif
+import com.gaje48.lms.ui.state.LmsViewModel
 
 @Composable
-fun Login(viewModel: Backend) {
-    val isLoading = viewModel.isLoading
-    val isAutoLoginLoading = viewModel.isAutoLoginLoading
-    val errorMessage = viewModel.errorMessage
+fun Login(viewModel: LmsViewModel) {
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val isLoading = uiState.isLoading
+    val isAutoLoginLoading = uiState.isAutoLoginLoading
+    val errorMessage = uiState.errorMessage
 
     var nim by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
@@ -35,7 +70,7 @@ fun Login(viewModel: Backend) {
         ) {
             LoadingGif(label = "AI sedang melakukan Auto-Login...")
         }
-        return // Hentikan render jika sedang auto login
+        return
     }
 
     Column(
@@ -118,7 +153,7 @@ fun Login(viewModel: Backend) {
                 )
 
                 AnimatedVisibility(
-                    visible = errorMessage.isNotEmpty(),
+                    visible = errorMessage != null,
                     enter = fadeIn() + expandVertically(),
                     exit = fadeOut() + shrinkVertically()
                 ) {
@@ -127,18 +162,22 @@ fun Login(viewModel: Backend) {
                         shape = RoundedCornerShape(12.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        Text(
-                            text = errorMessage,
-                            color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall,
-                            modifier = Modifier.padding(12.dp),
-                            fontWeight = FontWeight.Medium
-                        )
+                        errorMessage?.let {
+                            Text(
+                                text = it,
+                                color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                                modifier = Modifier.padding(12.dp),
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                     }
                 }
 
                 Button(
-                    onClick = { viewModel.manualLogin(nim, password) },
+                    onClick = {
+                        viewModel.manualLogin(nim, password)
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(64.dp),
@@ -151,7 +190,7 @@ fun Login(viewModel: Backend) {
                             modifier = Modifier.size(24.dp),
                             color = MaterialTheme.colorScheme.onPrimary,
                             strokeWidth = 3.dp,
-                            strokeCap = androidx.compose.ui.graphics.StrokeCap.Round
+                            strokeCap = StrokeCap.Round
                         )
                         Spacer(modifier = Modifier.width(12.dp))
                         Text("Memproses...", fontWeight = FontWeight.Bold)

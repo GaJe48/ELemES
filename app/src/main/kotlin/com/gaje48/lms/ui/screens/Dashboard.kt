@@ -1,4 +1,4 @@
-package com.gaje48.elemes
+package com.gaje48.lms.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
@@ -14,7 +14,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -23,7 +23,27 @@ import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.MeetingRoom
 import androidx.compose.material.icons.filled.School
 import androidx.compose.material.icons.filled.Timer
-import androidx.compose.material3.*
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LargeTopAppBar
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SuggestionChip
+import androidx.compose.material3.SuggestionChipDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
@@ -45,7 +65,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
+import com.gaje48.lms.model.CourseInfo
+import com.gaje48.lms.model.StudentInfo
+import com.gaje48.lms.ui.components.EmptyGif
+import com.gaje48.lms.ui.state.LmsViewModel
 import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
@@ -73,16 +98,16 @@ fun PreviewDashboard() {
         lecturerName = "Pak Dosen",
         lecturerHp = "0812345",
         lecturerPhoto = "",
-        presenceInfo = PresenceInfo(16, 80, "12345"),
-        meetingList = emptyMap()
+        allMeeting = emptyMap()
     )
 
     val dummyList = listOf(dummyCourse, dummyCourse, dummyCourse, dummyCourse, dummyCourse)
 
     MaterialTheme {
         DashboardContent(
-            studentProfile = dummyProfile,
-            lectureCourse = dummyList,
+            studentInfo = dummyProfile,
+            allCourseInfo = dummyList,
+            allPresenceInfo = emptyMap(),
             isRefreshing = false,
             onRefresh = {},
             onCourseClick = {},
@@ -95,15 +120,18 @@ fun PreviewDashboard() {
 
 @Composable
 fun Dashboard(
-    viewModel: Backend,
-    onCourseClick: (Int) -> Unit,
-    onPresenceClick: (Int) -> Unit,
-    onTaskClick: (Int) -> Unit
+    viewModel: LmsViewModel,
+    onCourseClick: (CourseInfo) -> Unit,
+    onPresenceClick: (CourseInfo) -> Unit,
+    onTaskClick: (CourseInfo) -> Unit
 ) {
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
     DashboardContent(
-        studentProfile = viewModel.studentProfileUI,
-        lectureCourse = viewModel.lectureCourseUI,
-        isRefreshing = viewModel.isRefreshing,
+        studentInfo = uiState.studentInfo ?: return,
+        allCourseInfo = uiState.allCourseInfo,
+        allPresenceInfo = uiState.allPresenceInfo,
+        isRefreshing = uiState.isRefreshing,
         onRefresh = { viewModel.refreshDashboard() },
         onCourseClick = onCourseClick,
         onPresenceClick = onPresenceClick,
@@ -115,13 +143,14 @@ fun Dashboard(
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class, ExperimentalHazeMaterialsApi::class)
 @Composable
 fun DashboardContent(
-    studentProfile: StudentInfo,
-    lectureCourse: List<CourseInfo>,
+    studentInfo: StudentInfo,
+    allCourseInfo: List<CourseInfo>,
+    allPresenceInfo: Map<String, List<Boolean>>,
     isRefreshing: Boolean,
     onRefresh: () -> Unit,
-    onCourseClick: (Int) -> Unit,
-    onPresenceClick: (Int) -> Unit,
-    onTaskClick: (Int) -> Unit,
+    onCourseClick: (CourseInfo) -> Unit,
+    onPresenceClick: (CourseInfo) -> Unit,
+    onTaskClick: (CourseInfo) -> Unit,
     onLogout: () -> Unit,
 ) {
     val hazeState = rememberHazeState()
@@ -204,7 +233,7 @@ fun DashboardContent(
                         title = {
                             Column {
                                 Text(
-                                    text = "Halo, ${studentProfile.studentName.split(" ")[0]}",
+                                    text = "Halo, ${studentInfo.studentName.split(" ")[0]}",
                                     style = MaterialTheme.typography.headlineMedium,
                                     fontWeight = FontWeight.ExtraBold
                                 )
@@ -261,7 +290,7 @@ fun DashboardContent(
                                     modifier = Modifier.size(84.dp)
                                 ) {
                                     AsyncImage(
-                                        model = studentProfile.studentPhoto,
+                                        model = studentInfo.studentPhoto,
                                         contentDescription = "Foto Profil",
                                         modifier = Modifier
                                             .fillMaxSize()
@@ -272,7 +301,7 @@ fun DashboardContent(
                                 Spacer(modifier = Modifier.width(20.dp))
                                 Column {
                                     Text(
-                                        text = studentProfile.studentName,
+                                        text = studentInfo.studentName,
                                         style = MaterialTheme.typography.titleLarge,
                                         fontWeight = FontWeight.Bold,
                                         color = MaterialTheme.colorScheme.onPrimaryContainer,
@@ -280,7 +309,7 @@ fun DashboardContent(
                                         overflow = TextOverflow.Ellipsis
                                     )
                                     Text(
-                                        text = studentProfile.npm,
+                                        text = studentInfo.npm,
                                         style = MaterialTheme.typography.labelLarge,
                                         color = MaterialTheme.colorScheme.primary,
                                         fontWeight = FontWeight.Medium
@@ -291,7 +320,7 @@ fun DashboardContent(
                                         contentColor = MaterialTheme.colorScheme.onPrimaryContainer
                                     ) {
                                         Text(
-                                            studentProfile.studyProgram,
+                                            studentInfo.studyProgram,
                                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                                         )
                                     }
@@ -300,26 +329,30 @@ fun DashboardContent(
                         }
                     }
 
-                    if (lectureCourse.isEmpty()) {
+                    if (allCourseInfo.isEmpty()) {
                         item {
                             Box(
                                 modifier = Modifier.fillParentMaxWidth().fillParentMaxHeight(0.6f),
                                 contentAlignment = Alignment.Center
-                            ) { EmptyGif(label = "Belum ada jadwal mata kuliah") }
-                        }
-                    } else {
-                        item {
-                            Text(
-                                text = "Jadwal Mata Kuliah",
-                                style = MaterialTheme.typography.headlineSmall,
-                                fontWeight = FontWeight.Black,
-                                modifier = Modifier.padding(vertical = 8.dp)
-                            )
+                            ) {
+                                EmptyGif(label = "Belum ada jadwal mata kuliah")
+                            }
                         }
 
-                        itemsIndexed(lectureCourse) { courseIndex, course ->
-                            CourseExpressiveCard(courseIndex, course, onCourseClick, onPresenceClick, onTaskClick)
-                        }
+                        return@LazyColumn
+                    }
+
+                    item {
+                        Text(
+                            text = "Jadwal Mata Kuliah",
+                            style = MaterialTheme.typography.headlineSmall,
+                            fontWeight = FontWeight.Black,
+                            modifier = Modifier.padding(vertical = 8.dp)
+                        )
+                    }
+
+                    items(allCourseInfo) { course ->
+                        CourseExpressiveCard(course, allPresenceInfo, onCourseClick, onPresenceClick, onTaskClick)
                     }
                 }
             }
@@ -329,15 +362,15 @@ fun DashboardContent(
 
 @Composable
 fun CourseExpressiveCard(
-    courseIndex: Int,
     course: CourseInfo,
-    onCourseClick: (Int) -> Unit,
-    onPresenceClick: (Int) -> Unit,
-    onTaskClick: (Int) -> Unit
+    presenceInfo: Map<String, List<Boolean>>,
+    onCourseClick: (CourseInfo) -> Unit,
+    onPresenceClick: (CourseInfo) -> Unit,
+    onTaskClick: (CourseInfo) -> Unit
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
-        onClick = { onCourseClick(courseIndex) },
+        onClick = { onCourseClick(course) },
         shape = RoundedCornerShape(32.dp),
         colors = CardDefaults.cardColors(
             containerColor = MaterialTheme.colorScheme.surface
@@ -389,10 +422,7 @@ fun CourseExpressiveCard(
             }
 
             Spacer(modifier = Modifier.height(16.dp))
-            AttendanceGraph(
-                jumlahPertemuan = course.presenceInfo.jumlahPertemuan,
-                percentage = course.presenceInfo.persen
-            )
+            AttendanceGraph(presenceInfo[course.courseCode] ?: emptyList())
 
             Spacer(modifier = Modifier.height(20.dp))
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
@@ -420,7 +450,7 @@ fun CourseExpressiveCard(
 
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     SuggestionChip(
-                        onClick = { onPresenceClick(courseIndex) },
+                        onClick = { onPresenceClick(course) },
                         label = { Text("Absen", fontSize = 12.sp) },
                         shape = RoundedCornerShape(12.dp),
                         border = null,
@@ -429,7 +459,7 @@ fun CourseExpressiveCard(
                         )
                     )
                     SuggestionChip(
-                        onClick = { onTaskClick(courseIndex) },
+                        onClick = { onTaskClick(course) },
                         label = { Text("Tugas", fontSize = 12.sp) },
                         shape = RoundedCornerShape(12.dp),
                         border = null,
@@ -442,8 +472,6 @@ fun CourseExpressiveCard(
         }
     }
 }
-
-private const val TOTAL_SEMESTER_MEETINGS = 16
 
 @Composable
 fun InfoChip(
@@ -477,15 +505,16 @@ fun InfoChip(
 }
 
 @Composable
-fun AttendanceGraph(jumlahPertemuan: Int, percentage: Int) {
+fun AttendanceGraph(presenceInfo: List<Boolean>) {
+    val totalMeetings = 16
 
-    // 2. Hitung jumlah kehadiran berdasarkan persentase
-    // Misal: current = 5, persen = 80%, maka hadir = 4, alpa = 1
-    val attendedCount = ((percentage / 100.0) * jumlahPertemuan).roundToInt()
-    val missedCount = maxOf(0, jumlahPertemuan - attendedCount)
+    val jumlahPertemuan = presenceInfo.size
+    val attendedCount = presenceInfo.count { it }
 
-    // 3. Hitung sisa pertemuan (Asumsi 1 semester = 16 pertemuan)
-    val totalMeetings = TOTAL_SEMESTER_MEETINGS
+    val percentage = if (jumlahPertemuan > 0)
+            ((attendedCount.toDouble() / jumlahPertemuan) * 100).roundToInt()
+    else 0
+
     val upcomingCount = maxOf(0, totalMeetings - jumlahPertemuan)
 
     Column(modifier = Modifier.fillMaxWidth()) {
@@ -497,31 +526,22 @@ fun AttendanceGraph(jumlahPertemuan: Int, percentage: Int) {
         )
         Spacer(modifier = Modifier.height(8.dp))
 
-        // Membungkus kotak-kotak dalam satu baris (Graph)
         Row(
             horizontalArrangement = Arrangement.spacedBy(6.dp),
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.fillMaxWidth()
         ) {
-            // Kotak Hijau (Hadir)
-            repeat(attendedCount) {
+            presenceInfo.forEach { isPresent ->
+                val boxColor = if (isPresent) Color(0xFF4CAF50) else Color(0xFFF44336)
+
                 Box(
                     modifier = Modifier
                         .size(14.dp)
                         .clip(RoundedCornerShape(3.dp))
-                        .background(Color(0xFF4CAF50)) // Hijau
+                        .background(boxColor)
                 )
             }
-            // Kotak Merah (Tidak Hadir)
-            repeat(missedCount) {
-                Box(
-                    modifier = Modifier
-                        .size(14.dp)
-                        .clip(RoundedCornerShape(3.dp))
-                        .background(Color(0xFFF44336)) // Merah
-                )
-            }
-            // Kotak Abu-abu (Belum pertemuan)
+
             repeat(upcomingCount) {
                 Box(
                     modifier = Modifier

@@ -1,7 +1,17 @@
-package com.gaje48.elemes
+package com.gaje48.lms.ui.screens
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
@@ -10,11 +20,24 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.Link
-import androidx.compose.material3.*
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.LargeTopAppBar
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.pulltorefresh.PullToRefreshDefaults
 import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
-import androidx.compose.runtime.*
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -22,11 +45,17 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.gaje48.lms.R
+import com.gaje48.lms.model.LoadMode
+import com.gaje48.lms.ui.components.EmptyGif
+import com.gaje48.lms.ui.components.ErrorGif
+import com.gaje48.lms.ui.components.LoadingGif
+import com.gaje48.lms.ui.state.LmsViewModel
 import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
@@ -36,22 +65,21 @@ import dev.chrisbanes.haze.rememberHazeState
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class, ExperimentalHazeMaterialsApi::class)
 @Composable
 fun MeetingDetail(
-    viewModel: Backend,
+    viewModel: LmsViewModel,
     meetingUrl: String,
     onBackClick: () -> Unit,
 ) {
-    val detail = viewModel.meetingDetailUI
-    val isLoading = viewModel.isLoading
-    val errorMessage = viewModel.errorMessage
-    val context = LocalContext.current
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val allMeetingDetail = uiState.allMeetingContent
+    val isLoading = uiState.isLoading
+    val errorMessage = uiState.errorMessage
     val uriHandler = LocalUriHandler.current
     val hazeState = rememberHazeState()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val state = rememberPullToRefreshState()
 
     LaunchedEffect(Unit) {
-        viewModel.getMeetingDetail(meetingUrl)
-        viewModel.executePresence(meetingUrl)
+        viewModel.loadMeetingDetail(meetingUrl)
     }
 
     Box(
@@ -73,14 +101,14 @@ fun MeetingDetail(
         )
 
         PullToRefreshBox(
-            isRefreshing = viewModel.isRefreshing,
+            isRefreshing = uiState.isRefreshing,
             state = state,
-            onRefresh = { viewModel.getMeetingDetail(meetingUrl, isSwipe = true) },
+            onRefresh = { viewModel.loadMeetingDetail(meetingUrl, LoadMode.REFRESH) },
             contentAlignment = Alignment.TopCenter,
             indicator = {
                 PullToRefreshDefaults.LoadingIndicator(
                     state = state,
-                    isRefreshing = viewModel.isRefreshing,
+                    isRefreshing = uiState.isRefreshing,
                     modifier = Modifier.padding(top = 16.dp)
                 )
             }
@@ -131,7 +159,7 @@ fun MeetingDetail(
                     ),
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
-                    if (detail.isEmpty()) {
+                    if (allMeetingDetail.isEmpty()) {
                         item {
                             Box(
                                 modifier = Modifier.fillParentMaxSize(),
@@ -139,9 +167,9 @@ fun MeetingDetail(
                             ) {
                                 when {
                                     isLoading -> LoadingGif()
-                                    errorMessage.isNotEmpty() -> ErrorGif(
+                                    errorMessage != null -> ErrorGif(
                                         message = errorMessage,
-                                        onRetry = { viewModel.getMeetingDetail(meetingUrl) }
+                                        onRetry = { viewModel.loadMeetingDetail(meetingUrl) }
                                     )
                                     else -> EmptyGif(label = "Tidak ada file materi yang tersedia")
                                 }
@@ -150,7 +178,7 @@ fun MeetingDetail(
                     } else {
                         val fileKeywords = listOf("pdf", "word", "powerpoint", "excel", "archive")
 
-                        val (files, links) = detail.partition { item ->
+                        val (files, links) = allMeetingDetail.partition { item ->
                             fileKeywords.any { keyword ->
                                 item.type.contains(keyword, ignoreCase = true)
                             }
@@ -166,7 +194,7 @@ fun MeetingDetail(
                                     subtitle = "Ketuk untuk mengunduh dokumen",
                                     icon = iconPainter(item.type),
                                     containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
-                                    onClick = { viewModel.executeDownload(context, item.url) }
+                                    onClick = { viewModel.downloadFile(item.url) }
                                 )
                             }
                         }

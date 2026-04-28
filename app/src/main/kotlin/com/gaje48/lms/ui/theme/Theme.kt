@@ -1,4 +1,4 @@
-package com.gaje48.elemes.ui.theme
+package com.gaje48.lms.ui.theme
 
 import android.os.Build
 import androidx.compose.material3.MaterialTheme

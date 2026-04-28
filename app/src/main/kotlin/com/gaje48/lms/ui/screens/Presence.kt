@@ -1,4 +1,4 @@
-package com.gaje48.elemes
+package com.gaje48.lms.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
@@ -22,9 +22,6 @@ import androidx.compose.material3.pulltorefresh.rememberPullToRefreshState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -33,6 +30,14 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.gaje48.lms.model.CourseInfo
+import com.gaje48.lms.model.LoadMode
+import com.gaje48.lms.model.StatusPresensi
+import com.gaje48.lms.ui.components.EmptyGif
+import com.gaje48.lms.ui.components.ErrorGif
+import com.gaje48.lms.ui.components.LoadingGif
+import com.gaje48.lms.ui.state.LmsViewModel
 import dev.chrisbanes.haze.hazeEffect
 import dev.chrisbanes.haze.hazeSource
 import dev.chrisbanes.haze.materials.ExperimentalHazeMaterialsApi
@@ -41,37 +46,26 @@ import dev.chrisbanes.haze.rememberHazeState
 
 @Composable
 fun LayarRekapAbsen(
-    courseIndex: Int,
-    viewModel: Backend,
+    course: CourseInfo,
+    viewModel: LmsViewModel,
     onBackClick: () -> Unit
 ) {
-    val dataAbsen = viewModel.presenceDetailUI
-    val isLoading = viewModel.isLoading
-    val isPresenceSubmitting = viewModel.isPresenceSubmitting
-    val matkul = viewModel.lectureCourseUI[courseIndex]
-    var activePresenceUrl by remember { mutableStateOf<String?>(null) }
+    val uiState by viewModel.uiState.collectAsStateWithLifecycle()
 
-    LaunchedEffect(courseIndex) {
-        viewModel.getPresence(courseIndex)
+    LaunchedEffect(course) {
+        viewModel.loadPresence(course)
     }
 
     LayarRekapAbsenStateless(
-        courseName = matkul.courseName,
-        dataAbsen = dataAbsen,
-        errorMessage = viewModel.errorMessage,
-        isLoading = isLoading,
-        isPresenceSubmitting = isPresenceSubmitting,
-        activePresenceUrl = activePresenceUrl,
-        isRefreshing = viewModel.isRefreshing,
-        onRefresh = { viewModel.getPresence(courseIndex, isSwipe = true) },
-        onRetry = { viewModel.getPresence(courseIndex) },
-        onAbsenClick = { url ->
-            activePresenceUrl = url
-            viewModel.executePresence(url) {
-                activePresenceUrl = null
-                viewModel.getPresence(courseIndex)
-            }
-        },
+        courseName = course.courseName,
+        allPresenceDetail = uiState.allPresenceStatus,
+        errorMessage = uiState.errorMessage,
+        isLoading = uiState.isLoading,
+        isPresenceSubmitting = uiState.isPresenceSubmitting,
+        isRefreshing = uiState.isRefreshing,
+        onRefresh = { viewModel.loadPresence(course, LoadMode.REFRESH) },
+        onRetry = { viewModel.loadPresence(course) },
+        onAbsenClick = { viewModel.submitPresence(course, it) },
         onBackClick = onBackClick
     )
 }
@@ -80,11 +74,10 @@ fun LayarRekapAbsen(
 @Composable
 fun LayarRekapAbsenStateless(
     courseName: String,
-    dataAbsen: List<StatusPresensi>,
-    errorMessage: String,
+    allPresenceDetail: List<StatusPresensi>,
+    errorMessage: String?,
     isLoading: Boolean,
     isPresenceSubmitting: Boolean,
-    activePresenceUrl: String?,
     isRefreshing: Boolean,
     onRefresh: () -> Unit,
     onRetry: () -> Unit,
@@ -94,6 +87,20 @@ fun LayarRekapAbsenStateless(
     val hazeState = rememberHazeState()
     val scrollBehavior = TopAppBarDefaults.exitUntilCollapsedScrollBehavior()
     val state = rememberPullToRefreshState()
+
+    if (isPresenceSubmitting) {
+        AlertDialog(
+            onDismissRequest = {},
+            confirmButton = {},
+            text = {
+                Row(
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    LoadingGif(label = "Sedang proses absen...")
+                }
+            }
+        )
+    }
 
     Box(
         modifier = Modifier
@@ -167,7 +174,7 @@ fun LayarRekapAbsenStateless(
                     )
                 }
             ) { paddingValues ->
-                if (dataAbsen.isEmpty()) {
+                if (allPresenceDetail.isEmpty()) {
                     LazyColumn(
                         modifier = Modifier
                             .fillMaxSize()
@@ -187,7 +194,7 @@ fun LayarRekapAbsenStateless(
                             ) {
                                 when {
                                     isLoading -> LoadingGif()
-                                    errorMessage.isNotEmpty() -> ErrorGif(
+                                    errorMessage != null -> ErrorGif(
                                         message = errorMessage,
                                         onRetry = onRetry
                                     )
@@ -232,13 +239,13 @@ fun LayarRekapAbsenStateless(
                                             color = MaterialTheme.colorScheme.onSecondaryContainer
                                         )
                                         Text(
-                                            "${dataAbsen.count { it is StatusPresensi.SudahHadir }} dari ${dataAbsen.size} Pertemuan",
+                                            "${allPresenceDetail.count { it is StatusPresensi.SudahHadir }} dari ${allPresenceDetail.size} Pertemuan",
                                             style = MaterialTheme.typography.bodyMedium,
                                             color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.7f)
                                         )
                                     }
                                     Text(
-                                        text = "${(dataAbsen.count { it is StatusPresensi.SudahHadir } * 100 / dataAbsen.size)}%",
+                                        text = "${(allPresenceDetail.count { it is StatusPresensi.SudahHadir } * 100 / allPresenceDetail.size)}%",
                                         style = MaterialTheme.typography.displaySmall,
                                         fontWeight = FontWeight.Black,
                                         color = MaterialTheme.colorScheme.primary,
@@ -298,13 +305,10 @@ fun LayarRekapAbsenStateless(
                             )
                         }
 
-                        itemsIndexed(dataAbsen) { index, status ->
+                        itemsIndexed(allPresenceDetail) { index, status ->
                             KotakPertemuanExpressive(
                                 pertemuanKe = index + 1,
                                 status = status,
-                                isSubmitting = status is StatusPresensi.BelumHadirAdaLink &&
-                                    isPresenceSubmitting &&
-                                    status.linkDownload == activePresenceUrl,
                                 isActionEnabled = !isPresenceSubmitting,
                                 onAbsenClick = {
                                     // Pengecekan aman (Smart Cast)
@@ -325,7 +329,6 @@ fun LayarRekapAbsenStateless(
 fun KotakPertemuanExpressive(
     pertemuanKe: Int,
     status: StatusPresensi,
-    isSubmitting: Boolean,
     isActionEnabled: Boolean,
     onAbsenClick: () -> Unit
 ) {
@@ -403,17 +406,7 @@ fun KotakPertemuanExpressive(
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
                         modifier = Modifier.fillMaxWidth().height(36.dp)
                     ) {
-                        if (isSubmitting) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.onError
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text("Mengisi...", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                        } else {
-                            Text("Isi Absen", fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
-                        }
+                        Text("Isi Absen", fontSize = 12.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
                     }
                 }
                 is StatusPresensi.BelumHadirTanpaLink -> {
@@ -440,11 +433,10 @@ fun PreviewLayarRekapAbsen() {
     MaterialTheme {
         LayarRekapAbsenStateless(
             courseName = "Pemrograman Visual Lanjut",
-            dataAbsen = listOf(StatusPresensi.SudahHadir, StatusPresensi.BelumHadirTanpaLink, StatusPresensi.BelumHadirAdaLink("")),
+            allPresenceDetail = listOf(StatusPresensi.SudahHadir, StatusPresensi.BelumHadirTanpaLink, StatusPresensi.BelumHadirAdaLink("")),
             errorMessage = "",
             isLoading = false,
             isPresenceSubmitting = false,
-            activePresenceUrl = null,
             isRefreshing = false,
             onRefresh = {},
             onRetry = {},

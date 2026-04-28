@@ -1,3 +1,12 @@
+<p align="center">
+  <img src="banner.png" alt="LMS Unindra Banner" />
+</p>
+
+<h1 align="center">LMS Unindra Mobile</h1>
+<p align="center">
+  Modern Android Client for LMS Unindra
+</p>
+
 # LMS Unindra
 
 Aplikasi Android native berbasis Jetpack Compose untuk membantu mahasiswa mengakses LMS Unindra dari perangkat mobile. Proyek ini menangani login, mengambil data dashboard, menampilkan daftar pertemuan, membuka materi, melihat rekap presensi, mengunduh file, dan mengunggah tugas langsung dari aplikasi.
@@ -5,46 +14,49 @@ Aplikasi Android native berbasis Jetpack Compose untuk membantu mahasiswa mengak
 ## Fitur Utama
 
 - Login ke LMS Unindra menggunakan NIM dan password.
-- Auto-login menggunakan kredensial yang disimpan secara terenkripsi.
+- Auto-login menggunakan kredensial yang disimpan secara aman dengan enkripsi AES-256 GCM.
 - Pemecahan captcha matematika otomatis dengan ML Kit Text Recognition.
 - Menampilkan profil mahasiswa dan daftar mata kuliah dari dashboard LMS.
 - Menampilkan daftar pertemuan per mata kuliah.
 - Menampilkan detail materi per pertemuan, termasuk file dan tautan eksternal.
 - Rekap presensi per mata kuliah.
-- Download materi ke folder `Downloads` dengan progress notification.
+- Download materi ke folder `Downloads/elemes` dengan progress notification.
 - Upload tugas langsung dari file picker dengan progress indicator.
 - Pull-to-refresh di beberapa halaman utama.
+- UI modern dengan efek glassmorphism (Haze).
 
 ## Stack Teknologi
 
-- Kotlin
-- Android SDK
-- Jetpack Compose
-- Material 3
-- Navigation Compose
-- OkHttp
-- Jsoup
-- ML Kit Text Recognition
-- Coil
-- AndroidX Security Crypto
-- Kotlin Coroutines
+- **Bahasa:** Kotlin
+- **UI:** Jetpack Compose, Material 3, Haze (Glassmorphism)
+- **Navigasi:** Navigation 3 (AndroidX)
+- **Networking:** Ktor Client (CIO engine)
+- **Parsing:** Jsoup
+- **ML:** ML Kit Text Recognition
+- **DI:** Koin
+- **Storage:** Room (Database), DataStore (Preferences)
+- **Security:** Google Tink (AES-256 GCM)
+- **Image Loading:** Coil (termasuk dukungan GIF)
+- **Concurrency:** Kotlin Coroutines
 
 ## Struktur Proyek
 
 ```text
 .
 ├── app/
-│   ├── src/main/java/com/gaje48/elemes/
+│   ├── src/main/kotlin/com/gaje48/lms/
 │   │   ├── MainActivity.kt
-│   │   ├── ViewModel.kt
-│   │   ├── LmsRepository.kt
-│   │   ├── Login.kt
-│   │   ├── Dashboard.kt
-│   │   ├── MeetingList.kt
-│   │   ├── MeetingDetail.kt
-│   │   ├── Presence.kt
-│   │   ├── Task.kt
-│   │   └── Models.kt
+│   │   ├── LmsApplication.kt
+│   │   ├── data/             # Layer data (Repository & Data Sources)
+│   │   ├── di/               # Konfigurasi Koin
+│   │   ├── model/            # Data models
+│   │   ├── navigation/       # Navigasi aplikasi
+│   │   ├── ui/
+│   │   │   ├── components/   # Komponen UI reusable
+│   │   │   ├── screens/      # Halaman aplikasi (Login, Dashboard, dll.)
+│   │   │   ├── state/        # ViewModel & UI State
+│   │   │   └── theme/        # Tema & Styling
+│   │   └── util/             # Helper utilities
 │   └── src/main/res/
 ├── gradle/
 ├── build.gradle.kts
@@ -55,7 +67,7 @@ Aplikasi Android native berbasis Jetpack Compose untuk membantu mahasiswa mengak
 ## Alur Aplikasi
 
 1. Pengguna login dengan NIM dan password LMS.
-2. Aplikasi mengambil halaman login, membaca captcha, lalu mencoba login otomatis.
+2. Aplikasi mengambil halaman login, membaca captcha menggunakan ML Kit, lalu mencoba login otomatis.
 3. Setelah berhasil, aplikasi mem-parsing dashboard LMS untuk mengambil:
    - data mahasiswa,
    - daftar mata kuliah,
@@ -65,11 +77,11 @@ Aplikasi Android native berbasis Jetpack Compose untuk membantu mahasiswa mengak
 
 ## Persyaratan
 
-- Android Studio versi terbaru yang mendukung:
-  - Android Gradle Plugin `9.1.0`
-  - Kotlin `2.3.20`
-- JDK 11
-- Perangkat atau emulator Android dengan minimum SDK 29
+- Android Studio versi terbaru (mendukung AGP 9.2+)
+- Android Gradle Plugin `9.2.0`
+- Kotlin `2.3.20`
+- JDK 17
+- Perangkat atau emulator Android dengan minimum SDK 29 (Android 10)
 - Koneksi internet untuk mengakses `https://lms.unindra.ac.id`
 
 ## Cara Menjalankan
@@ -124,32 +136,16 @@ app/build/outputs/apk/
 
 ## Catatan Implementasi
 
-- Kredensial pengguna disimpan menggunakan `EncryptedSharedPreferences`.
-- Sesi login dipertahankan menggunakan `CookieJar` dari OkHttp.
+- Kredensial pengguna disimpan menggunakan `DataStore` yang dienkripsi dengan `Google Tink`.
+- Sesi login dipertahankan menggunakan `HttpCookies` plugin dari Ktor.
 - Data LMS diambil dengan pendekatan HTML scraping menggunakan Jsoup.
 - Auto-login akan mencoba ulang captcha hingga 3 kali.
-- Upload tugas membatasi ukuran file maksimal 20 MB.
+- Download file diarahkan ke folder khusus `Downloads/elemes`.
 - Beberapa endpoint LMS dipanggil secara langsung, sehingga perubahan struktur HTML atau endpoint dari pihak LMS dapat memengaruhi aplikasi.
-
-## Keterbatasan
-
-- Proyek ini bergantung pada struktur halaman LMS Unindra saat ini.
-- Jika captcha, form login, atau markup halaman berubah, fitur login atau parsing data bisa ikut rusak.
-- Nama aplikasi yang tampil di resource saat ini masih menggunakan placeholder `Lorem Ipsum` dan bisa disesuaikan lagi.
 
 ## Disclaimer
 
-Proyek ini tampak dibuat untuk mempermudah akses ke LMS Unindra dan bukan aplikasi resmi kampus. Gunakan secara bertanggung jawab, terutama karena aplikasi menyimpan sesi login dan berinteraksi langsung dengan layanan LMS.
-
-## Pengembangan Lanjutan
-
-Beberapa ide pengembangan berikut bisa dipertimbangkan:
-
-- Menambahkan screenshot aplikasi ke README.
-- Menambahkan unit test dan instrumented test yang relevan.
-- Menambahkan mode offline/caching sederhana untuk data terakhir.
-- Memisahkan layer jaringan, parser, dan UI agar lebih mudah dirawat.
-- Mengganti placeholder nama aplikasi dan branding visual.
+Proyek ini dibuat untuk mempermudah akses ke LMS Unindra dan **bukan aplikasi resmi** kampus. Gunakan secara bertanggung jawab, terutama karena aplikasi menyimpan sesi login dan berinteraksi langsung dengan layanan LMS.
 
 ## Lisensi
 

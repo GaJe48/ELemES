@@ -1,4 +1,4 @@
-package com.gaje48.elemes
+package com.gaje48.lms
 
 import org.junit.Test
 
